@@ -7,6 +7,22 @@ import {
   Search, Filter, Lock, Calculator, Settings, Info
 } from 'lucide-react';
 
+import { initializeApp } from "firebase/app";
+import { getFirestore, collection, addDoc, getDocs, doc, deleteDoc, updateDoc, query, where } from "firebase/firestore";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDdzNfCoIg_AKWZyRST7XsLnik18O6UjOE",
+  authDomain: "apartmanyonetimi-e3686.firebaseapp.com",
+  projectId: "apartmanyonetimi-e3686",
+  storageBucket: "apartmanyonetimi-e3686.firebasestorage.app",
+  messagingSenderId: "922643542877",
+  appId: "1:922643542877:web:d91e1a2efb95eb4cc36eb4",
+  measurementId: "G-FE2B13P1CN"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
 // --- MOCK DATA OLUŞTURUCULAR ---
 const generateUnits = () => {
   const units = [];
@@ -24,12 +40,7 @@ const generateUnits = () => {
 
 const EXPENSE_CATEGORIES = ['Elektrik', 'Su', 'Asansör', 'Temizlik', 'Maaş/SGK', 'Kıdem Tazminatı Fonu', 'Bakım/Onarım', 'Diğer'];
 
-const initialTransactions = [
-  { id: 1, date: '2023-11-01T10:00:00.000Z', type: 'due', amount: 500, unitId: 'Daire-1', description: 'Kasım 2023 Aidatı' },
-  { id: 2, date: '2023-11-15T14:30:00.000Z', type: 'payment', amount: 500, unitId: 'Daire-1', description: 'Kasım 2023 Aidatı (Kredi Kartı)' },
-  { id: 3, date: '2023-11-01T10:00:00.000Z', type: 'due', amount: 750, unitId: 'Dükkan-45', description: 'Kasım 2023 Aidatı' }, 
-  { id: 4, date: '2023-11-10T09:00:00.000Z', type: 'expense', amount: 1250, unitId: null, category: 'Elektrik', description: 'Ekim Ayı Ortak Elektrik Faturası' },
-];
+const initialTransactions = [];
 
 const initialSettings = {
   grossMinimumWage: '',
@@ -45,6 +56,9 @@ const appReducer = (state, action) => {
   const createLog = (actionName, details, user) => ({ id: Date.now() + Math.random(), date: new Date().toISOString(), action: actionName, details, user });
 
   switch (action.type) {
+    case 'SET_TRANSACTIONS': {
+      return { ...state, transactions: action.payload };
+    }
     case 'ADD_TRANSACTION': {
       const { transaction, user } = action.payload;
       const typeName = transaction.type === 'due' ? 'Borçlandırma' : transaction.type === 'payment' ? 'Tahsilat' : 'Gider';
@@ -351,6 +365,27 @@ export default function App() {
     return () => window.removeEventListener('wheel', handleWheel);
   }, []);
 
+  useEffect(() => {
+    const fetchTransactions = async () => {
+      try {
+        const querySnapshot = await getDocs(collection(db, "transactions"));
+        const fetchedTxs = [];
+        querySnapshot.forEach((doc) => {
+          fetchedTxs.push({ id: doc.id, ...doc.data() });
+        });
+        
+        // Verileri tarihe göre yeniden eskiye sıralayalım
+        fetchedTxs.sort((a, b) => new Date(b.date) - new Date(a.date));
+        
+        dispatch({ type: 'SET_TRANSACTIONS', payload: fetchedTxs });
+      } catch (e) {
+        console.error("Buluttan veriler çekilemedi:", e);
+      }
+    };
+
+    fetchTransactions();
+  }, []);
+
   const computations = useMemo(() => getBalances(transactions, units), [transactions, units]);
 
   const lastBilledMonth = useMemo(() => {
@@ -382,12 +417,36 @@ export default function App() {
   const handleLogout = () => setCurrentUser(null);
   const getUserName = () => currentUser === 'admin' ? 'Yönetici' : currentUser;
 
-  const addTransaction = (transaction) => dispatch({ type: 'ADD_TRANSACTION', payload: { transaction, user: getUserName() }});
+  const addTransaction = async (transaction) => {
+    try {
+      // 1. Önce Firebase'e (Buluta) kaydet
+      const docRef = await addDoc(collection(db, "transactions"), {
+        ...transaction,
+        date: transaction.date || new Date().toISOString(),
+        addedBy: getUserName()
+      });
+
+      // 2. Sonra anında ekranda görünmesi için sistemi güncelle
+      const newTx = { ...transaction, id: docRef.id };
+      dispatch({ type: 'ADD_TRANSACTION', payload: { transaction: newTx, user: getUserName() }});
+      
+    } catch (e) {
+      console.error("Buluta kaydederken hata oluştu: ", e);
+      alert("Kayıt sırasında bir hata oluştu, internet bağlantınızı kontrol edin.");
+    }
+  };
   const addBulkTransactions = (txsArray) => dispatch({ type: 'ADD_BULK_TRANSACTIONS', payload: { transactions: txsArray, user: getUserName() }});
   const addBulkDue = (type, daireAmount, dukkanAmounts, description) => dispatch({ type: 'ADD_BULK_DUE', payload: { type, daireAmount, dukkanAmounts, description, user: getUserName() }});
   const onUpdateUnit = (updatedUnit) => dispatch({ type: 'UPDATE_UNIT', payload: { updatedUnit, user: getUserName() }});
   const onUpdateBulkUnits = (updatedUnits) => dispatch({ type: 'UPDATE_BULK_UNITS', payload: { updatedUnits, user: getUserName() }});
-  const onEditTransaction = (id, updatedData) => dispatch({ type: 'EDIT_TRANSACTION', payload: { id, updatedData, user: getUserName() }});
+  const onEditTransaction = async (id, updatedData) => {
+    try {
+      await updateDoc(doc(db, "transactions", id), updatedData);
+      dispatch({ type: 'EDIT_TRANSACTION', payload: { id, updatedData, user: getUserName() }});
+    } catch (e) {
+      console.error("Bulutta güncellenirken hata:", e);
+    }
+  };
   const onUpdateSettings = (newSettings) => dispatch({ type: 'UPDATE_SETTINGS', payload: { newSettings, user: getUserName() }});
 
   const [deleteDialog, setDeleteDialog] = useState({ isOpen: false, id: null, isGroup: false });
@@ -397,12 +456,25 @@ export default function App() {
   const deleteTransaction = (id) => { setDeleteDialog({ isOpen: true, id, isGroup: false }); setAdminPassword(''); setPasswordError(''); };
   const deleteTransactionGroup = (groupId) => { setDeleteDialog({ isOpen: true, id: groupId, isGroup: true }); setAdminPassword(''); setPasswordError(''); };
 
-  const executeDelete = (e) => {
+  const executeDelete = async (e) => {
     e.preventDefault();
-    if (adminPassword === "admin123") {
-      if (deleteDialog.isGroup) dispatch({ type: 'DELETE_TRANSACTION_GROUP', payload: { groupId: deleteDialog.id, user: getUserName() } });
-      else dispatch({ type: 'DELETE_TRANSACTION', payload: { id: deleteDialog.id, user: getUserName() } });
-      setDeleteDialog({ isOpen: false, id: null, isGroup: false });
+    if (adminPassword === "200584") {
+      try {
+        if (deleteDialog.isGroup) {
+          const q = query(collection(db, "transactions"), where("groupId", "==", deleteDialog.id));
+          const snapshot = await getDocs(q);
+          snapshot.forEach(async (docItem) => {
+            await deleteDoc(doc(db, "transactions", docItem.id));
+          });
+          dispatch({ type: 'DELETE_TRANSACTION_GROUP', payload: { groupId: deleteDialog.id, user: getUserName() } });
+        } else {
+          await deleteDoc(doc(db, "transactions", deleteDialog.id));
+          dispatch({ type: 'DELETE_TRANSACTION', payload: { id: deleteDialog.id, user: getUserName() } });
+        }
+        setDeleteDialog({ isOpen: false, id: null, isGroup: false });
+      } catch (error) {
+        console.error("Buluttan silerken hata:", error);
+      }
     } else setPasswordError("Hatalı şifre! Lütfen tekrar deneyin.");
   };
 
@@ -505,7 +577,7 @@ function LoginScreen({ onLogin, units }) {
     setError('');
 
     if (selectedRole === 'admin') {
-      if (password === 'admin123') {
+      if (password === '200584') {
         onLogin('admin');
       } else {
         setError('Hatalı yönetici şifresi!');
@@ -547,7 +619,7 @@ function LoginScreen({ onLogin, units }) {
         </form>
 
         <div className="mt-6 text-xs text-slate-400 text-center bg-slate-50 p-3 rounded border border-slate-100">
-          <strong>Demo Bilgisi:</strong><br/>Yönetici şifresi: <code className="bg-slate-200 px-1 rounded text-slate-700">admin123</code><br/>Daire/Dükkan şifresi: <code className="bg-slate-200 px-1 rounded text-slate-700">1234</code>
+         
         </div>
       </div>
     </div>
