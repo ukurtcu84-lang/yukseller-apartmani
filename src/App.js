@@ -676,6 +676,11 @@ function AdminDashboard({ units, transactions, sysLogs, computations, lastBilled
           {activeTab === 'assembly' && <AdminAssembly units={units} computations={computations} transactions={transactions} settings={settings} />}
           {activeTab === 'history' && <AdminHistoryTabs transactions={transactions} sysLogs={sysLogs} onDeleteTransaction={onDeleteTransaction} onDeleteTransactionGroup={onDeleteTransactionGroup} onDeleteMultipleTransactions={onDeleteMultipleTransactions} />}
           {activeTab === 'settings' && <AdminSettings settings={settings} onUpdateSettings={onUpdateSettings} />}
+          <div className="mt-8 pb-4 text-center border-t border-slate-200 pt-4 no-print">
+  <p className="text-xs text-slate-400 font-medium tracking-widest uppercase">
+    © 2026 Yükseller Apartmanı • <span className="text-slate-500">Geliştiren: Ukurtcu © </span>
+  </p>
+</div>
         </div>
       </div>
     </div>
@@ -2184,6 +2189,11 @@ function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransactio
             </div>
           </div>
         )}
+        <footer className="mt-12 mb-8 text-center no-print">
+  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
+    Powered by Ukurtcu ©
+  </p>
+</footer>
       </div>
     </div>
   );
