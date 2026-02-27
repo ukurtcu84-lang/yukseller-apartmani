@@ -455,7 +455,7 @@ export default function App() {
 
   const deleteTransaction = (id) => { setDeleteDialog({ isOpen: true, id, isGroup: false }); setAdminPassword(''); setPasswordError(''); };
   const deleteTransactionGroup = (groupId) => { setDeleteDialog({ isOpen: true, id: groupId, isGroup: true }); setAdminPassword(''); setPasswordError(''); };
-
+  const deleteMultipleTransactions = (ids) => { setDeleteDialog({ isOpen: true, id: ids, isGroup: false }); setAdminPassword(''); setPasswordError(''); };
   const executeDelete = async (e) => {
     e.preventDefault();
     if (adminPassword === "200584") {
@@ -467,6 +467,12 @@ export default function App() {
             await deleteDoc(doc(db, "transactions", docItem.id));
           });
           dispatch({ type: 'DELETE_TRANSACTION_GROUP', payload: { groupId: deleteDialog.id, user: getUserName() } });
+        } else if (Array.isArray(deleteDialog.id)) {
+          // YENİ: ÇOKLU SİLME İŞLEMİ
+          for (const tId of deleteDialog.id) {
+            await deleteDoc(doc(db, "transactions", tId));
+            dispatch({ type: 'DELETE_TRANSACTION', payload: { id: tId, user: getUserName() } });
+          }
         } else {
           await deleteDoc(doc(db, "transactions", deleteDialog.id));
           dispatch({ type: 'DELETE_TRANSACTION', payload: { id: deleteDialog.id, user: getUserName() } });
@@ -526,7 +532,7 @@ export default function App() {
         <AdminDashboard 
           units={units} transactions={transactions} sysLogs={sysLogs} computations={computations} lastBilledMonth={lastBilledMonth} settings={settings}
           onAddTransaction={addTransaction} onAddBulkTransactions={addBulkTransactions} onAddBulkDue={addBulkDue}
-          onDeleteTransaction={deleteTransaction} onDeleteTransactionGroup={deleteTransactionGroup}
+          onDeleteTransaction={deleteTransaction} onDeleteTransactionGroup={deleteTransactionGroup} onDeleteMultipleTransactions={deleteMultipleTransactions}
           onEditTransaction={onEditTransaction} onUpdateUnit={onUpdateUnit} onUpdateBulkUnits={onUpdateBulkUnits} onUpdateSettings={onUpdateSettings} onLogout={handleLogout} 
         />
       )}
@@ -545,7 +551,7 @@ export default function App() {
               <h3 className="font-bold text-lg text-slate-800 flex items-center"><Trash2 className="text-red-500 mr-2" size={20}/> İşlemi Geri Al</h3>
               <button onClick={() => setDeleteDialog({ isOpen: false, id: null, isGroup: false })} className="text-slate-400 hover:text-slate-600 transition-colors">&times;</button>
             </div>
-            <p className="text-sm text-slate-600 mb-6">{deleteDialog.isGroup ? "Bu TOPLU işlemi geri almak istediğinize emin misiniz? Gruptaki tüm kayıtlar silinecek ve bakiyeler düzeltilecektir." : "Bu işlemi geri almak istediğinize emin misiniz? İlgili bakiye otomatik düzeltilecektir."}</p>
+            <p className="text-sm text-slate-600 mb-6">{deleteDialog.isGroup ? "Bu TOPLU işlemi geri almak istediğinize emin misiniz? Gruptaki tüm kayıtlar silinecek ve bakiyeler düzeltilecektir." : Array.isArray(deleteDialog.id) ? `Seçtiğiniz ${deleteDialog.id.length} adet işlemi geri almak istediğinize emin misiniz? Bakiyeler otomatik düzeltilecektir.` : "Bu işlemi geri almak istediğinize emin misiniz? İlgili bakiye otomatik düzeltilecektir."}</p>
             <form onSubmit={executeDelete} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Yönetici Şifresi</label>
@@ -629,7 +635,7 @@ function LoginScreen({ onLogin, units }) {
 // ==========================================
 // 2. YÖNETİCİ PANELİ
 // ==========================================
-function AdminDashboard({ units, transactions, sysLogs, computations, lastBilledMonth, settings, onAddTransaction, onAddBulkTransactions, onAddBulkDue, onDeleteTransaction, onDeleteTransactionGroup, onEditTransaction, onUpdateUnit, onUpdateBulkUnits, onUpdateSettings, onLogout }) {
+function AdminDashboard({ units, transactions, sysLogs, computations, lastBilledMonth, settings, onAddTransaction, onAddBulkTransactions, onAddBulkDue, onDeleteTransaction, onDeleteTransactionGroup, onDeleteMultipleTransactions, onEditTransaction, onUpdateUnit, onUpdateBulkUnits, onUpdateSettings, onLogout }) {
   const [activeTab, setActiveTab] = useState('overview'); 
   const { totalKasa, totalGider, totalBekleyenAidat, totalBekleyenDemirbas, totalBekleyenEkstra, totalBekleyenOzel, totalBekleyenFaiz, unitBalances } = computations;
 
@@ -1776,11 +1782,45 @@ function AdminExpenses({ transactions, onAddTransaction, onAddBulkTransactions }
 // ==========================================
 // 6. İŞLEM GEÇMİŞİ VE DENETİM İZİ (LOGLAR)
 // ==========================================
-function AdminHistoryTabs({ transactions, sysLogs, onDeleteTransaction, onDeleteTransactionGroup }) {
-  const [activeTab, setActiveTab] = useState('txs'); // 'txs' veya 'logs'
+function AdminHistoryTabs({ transactions, sysLogs, onDeleteTransaction, onDeleteTransactionGroup, onDeleteMultipleTransactions }) {
+  const [activeTab, setActiveTab] = useState('txs'); 
   const [expandedGroups, setExpandedGroups] = useState(new Set());
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('all');
+  
+  // YENİ: ÇOKLU SEÇİM HAFIZASI
+  const [selectedIds, setSelectedIds] = useState(new Set());
+
+  const toggleSelection = (id) => {
+    const newSet = new Set(selectedIds);
+    if (newSet.has(id)) newSet.delete(id); else newSet.add(id);
+    setSelectedIds(newSet);
+  };
+
+  const toggleGroupSelection = (item) => {
+    const newSet = new Set(selectedIds);
+    const allSelected = item.subItems.every(sub => newSet.has(sub.id));
+    item.subItems.forEach(sub => {
+      if (allSelected) newSet.delete(sub.id); else newSet.add(sub.id);
+    });
+    setSelectedIds(newSet);
+  };
+
+  const handleSelectAll = (e) => {
+    if (e.target.checked) {
+      const allIds = new Set();
+      groupedList.forEach(item => {
+        if (item.isGroup && item.type !== 'system_marker') {
+          item.subItems.forEach(sub => allIds.add(sub.id));
+        } else if (!item.isGroup && item.type !== 'system_marker') {
+          allIds.add(item.transactionId);
+        }
+      });
+      setSelectedIds(allIds);
+    } else {
+      setSelectedIds(new Set());
+    }
+  };
 
   const toggleGroup = (groupId) => {
     const newSet = new Set(expandedGroups);
