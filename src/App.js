@@ -563,6 +563,11 @@ export default function App() {
                 <button type="submit" className="flex-1 bg-red-600 text-white py-2 rounded-lg hover:bg-red-700 font-medium shadow-sm transition-colors">Onayla ve Sil</button>
               </div>
             </form>
+            <div className="mt-8 pt-6 border-t border-slate-100 text-center">
+  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-[0.2em]">
+    Developed by Ukurtcu©
+  </p>
+</div>
           </div>
         </div>
       )}
