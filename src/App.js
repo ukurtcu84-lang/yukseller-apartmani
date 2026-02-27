@@ -643,7 +643,7 @@ function LoginScreen({ onLogin, units }) {
       
       {/* İSTERSEN KUTUNUN DIŞINA DAHA SİLİK BİR TANE DAHA EKLEYEBİLİRİZ */}
       <p className="mt-6 text-[9px] text-slate-400 font-medium uppercase tracking-widest opacity-50">
-        v2.0 • Yükseller Management System
+        v2.0 • Ukurtcu Management System©
       </p>
     </div>
   );
