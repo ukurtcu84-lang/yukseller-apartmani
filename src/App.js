@@ -38,7 +38,7 @@ const generateUnits = () => {
 
 const EXPENSE_CATEGORIES = ['Elektrik', 'Su', 'Asansör', 'Temizlik', 'Maaş/SGK', 'Kıdem Tazminatı Fonu', 'Bakım/Onarım', 'Diğer'];
 
-const initialSettings = { grossMinimumWage: '', sgkEmployerRate: 16.75, unemploymentRate: 2, defaultInflationRate: '' };
+const initialSettings = { grossMinimumWage: 33500, sgkEmployerRate: 16.75, unemploymentRate: 2, defaultInflationRate: 35 };
 
 const appReducer = (state, action) => {
   const createLog = (actionName, details, user) => ({ id: Date.now() + Math.random(), date: new Date().toISOString(), action: actionName, details, user });
@@ -2000,7 +2000,7 @@ function AdminReport({ computations, transactions }) {
           <li>Kasa ve banka mevcudunun, muhasebe kayıtları ile tam bir mutabakat içinde olduğu ve an itibarıyla <strong>{totalKasa.toLocaleString('tr-TR')} TL</strong> net kasa/banka bakiyesi bulunduğu tespit edilmiştir.</li>
         </ul>
         <p className="indent-8">Ayrıca Yönetim Kurulunun, aidatlarını süresinde ödemeyen maliklere karşı Kat Mülkiyeti Kanunu'nun (KMK) 20. maddesi uyarınca aylık %5 gecikme tazminatı işletme ve takip yükümlülüğünü yerine getirdiği görülmüştür.</p>
-        <p className="indent-8 font-medium">Netice itibarıyla; görevini layıkıyla, şeffaf ve başarılı bir şekilde yerine getiren Yönetim Kurulunun hesap ve işlemlerinin usulüne tamamen uygun olduğu anlaşıldığından, Yönetim Kurulunun <strong>İBRA EDİLMESİNİ</strong> Genel Kurulun yüksek takdirlerine saygıyla arz ve teklif ederiz.</p>
+        <p className="indent-8 font-medium">Netice itibarıyla; yapılan ara denetimlerde, yönetimin görevini layıkıyla, şeffaf ve başarılı bir şekilde yerine getirdiği, Yönetim Kurulunun hesap ve işlemlerinin usulüne tamamen uygun olduğu görülmüştür.</p>
         
         <div className="mt-16 pt-8 flex justify-between px-8 text-center">
           <div><p className="font-bold mb-8">Denetçi</p><p className="border-t border-slate-400 pt-2 w-48 mx-auto">(İmza)</p></div>
