@@ -2016,12 +2016,336 @@ function AdminReport({ computations, transactions }) {
 // 9. GENEL KURUL VE BÜTÇE
 // ==========================================
 function AdminAssembly({ units, computations, transactions, settings }) {
+  const [docType, setDocType] = useState('butce'); 
+  const [meetingType, setMeetingType] = useState('olagan'); 
+  const [meetingDate, setMeetingDate] = useState('');
+  const [meetingTime, setMeetingTime] = useState('14:00');
+  const [meetingPlace, setMeetingPlace] = useState('Site Toplantı Salonu');
+  const [extraAgenda, setExtraAgenda] = useState('Acil onarım konularının görüşülmesi');
+
+  const [inflationRate, setInflationRate] = useState(settings.defaultInflationRate); 
+  const [budgetItems, setBudgetItems] = useState([]);
+
+  const { totalKasa, totalGider } = computations;
+  const totalTahsilat = transactions.filter(t => t.type === 'payment').reduce((acc, t) => acc + t.amount, 0);
+
+  const handleGenerateBudget = () => {
+    const expenses = transactions.filter(t => t.type === 'expense');
+    
+    let dataMonths = 1;
+    if (expenses.length > 0) {
+      const dates = expenses.map(e => new Date(e.date).getTime());
+      dataMonths = Math.max(1, Math.ceil((Math.max(...dates) - Math.min(...dates)) / (1000 * 60 * 60 * 24 * 30)));
+    }
+    
+    const aggregated = {};
+    expenses.forEach(t => { aggregated[t.category] = (aggregated[t.category] || 0) + t.amount; });
+
+    const newItems = EXPENSE_CATEGORIES.map(cat => {
+      const monthlyAvg = (aggregated[cat] || 0) / dataMonths;
+      let projectedMonthly = monthlyAvg * (1 + (Number(inflationRate) / 100));
+      let months = 12;
+      let defaultNote = '';
+      
+      if (cat === 'Maaş/SGK') {
+        const tahminiBrut = Number(settings.grossMinimumWage) || 0;
+        const isverenSgkPayi = tahminiBrut * (settings.sgkEmployerRate / 100);
+        const issizlikSigortasi = tahminiBrut * (settings.unemploymentRate / 100);
+        
+        projectedMonthly = tahminiBrut + isverenSgkPayi + issizlikSigortasi;
+        defaultNote = `Asgari Brüt: ${tahminiBrut}₺, İşveren SGK+İşsizlik: ${(isverenSgkPayi + issizlikSigortasi).toFixed(0)}₺`;
+      } else if (cat === 'Kıdem Tazminatı Fonu') {
+        const tahminiBrut = Number(settings.grossMinimumWage) || 0;
+        projectedMonthly = tahminiBrut / 12;
+        defaultNote = `Aylık Kıdem Tazminatı Karşılığı (Brüt Asgari Ücret / 12)`;
+      } else if (projectedMonthly === 0) {
+         if (cat === 'Elektrik') projectedMonthly = 2500;
+         else if (cat === 'Su') projectedMonthly = 800;
+         else if (cat === 'Asansör') projectedMonthly = 2000;
+         else if (cat === 'Temizlik') projectedMonthly = 1500;
+         else projectedMonthly = 1000;
+         
+         defaultNote = 'Geçmiş veri bulunmadığı için piyasa tahmini üzerinden eklendi.';
+      } else {
+         if (cat === 'Elektrik' || cat === 'Su') defaultNote = `Aylık ortalama harcama (${monthlyAvg.toFixed(0)} TL) üzerinden tahmini %${inflationRate} artış uygulanmıştır.`;
+         else defaultNote = `Geçmiş harcama ortalaması üzerinden enflasyon yansıtıldı.`;
+      }
+
+      return { id: cat, category: cat, monthlyAmount: Math.round(projectedMonthly), months: months, amount: Math.round(projectedMonthly * months), notes: defaultNote };
+    });
+    setBudgetItems(newItems);
+  };
+
+  useEffect(() => {
+    if (docType === 'butce' && budgetItems.length === 0) {
+      handleGenerateBudget();
+    }
+  }, [docType]);
+
+  const handleBudgetChange = (id, field, value) => {
+    setBudgetItems(prev => prev.map(item => {
+      if (item.id !== id) return item;
+      const updatedItem = { ...item, [field]: value };
+      
+      if (field === 'monthlyAmount' || field === 'months') {
+        updatedItem.amount = Number(updatedItem.monthlyAmount) * Number(updatedItem.months);
+      } 
+      else if (field === 'amount') {
+        updatedItem.monthlyAmount = Math.round(Number(value) / Number(updatedItem.months));
+      }
+      
+      return updatedItem;
+    }));
+  };
+
+  const totalAnnualBudget = budgetItems.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const totalMonthlyBudget = totalAnnualBudget / 12;
+  
+  const personelAnnual = budgetItems.filter(i => i.category.includes('Maaş') || i.category.includes('Personel') || i.category.includes('Kıdem')).reduce((sum, i) => sum + Number(i.amount || 0), 0);
+  const otherAnnual = totalAnnualBudget - personelAnnual;
+
+  const personelMonthly = personelAnnual / 12;
+  const otherMonthly = otherAnnual / 12;
+
+  const totalUnitsCount = units.length; 
+  const totalArsaPayi = 5741; 
+
+  const calculateAidat = (arsaPayi) => {
+    const esitPay = personelMonthly / totalUnitsCount; 
+    const arsaPayiOranliPay = otherMonthly * (arsaPayi / totalArsaPayi); 
+    return Math.ceil(esitPay + arsaPayiOranliPay);
+  };
+
   return (
-    <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
-      <div className="text-center py-12">
-        <BookOpen size={48} className="mx-auto text-blue-300 mb-4" />
-        <h2 className="text-2xl font-bold text-slate-800 mb-2">Genel Kurul & Bütçe Modülü</h2>
-        <p className="text-slate-500">Bu modül üzerinden önümüzdeki dönemin bütçesini planlayabilir ve genel kurul kararlarını arşivleyebilirsiniz.</p>
+    <div className="space-y-6">
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 no-print">
+        <h2 className="text-xl font-bold text-slate-800 mb-4 flex items-center"><BookOpen className="mr-2 text-blue-600" /> Genel Kurul & Bütçe Evrakları</h2>
+        
+        <div className="mb-4 flex flex-wrap gap-6 bg-blue-50 p-4 rounded-lg border border-blue-100">
+          <span className="font-semibold text-blue-800">Toplantı Türü:</span>
+          <label className="flex items-center cursor-pointer text-blue-900"><input type="radio" name="meetingType" value="olagan" checked={meetingType === 'olagan'} onChange={(e) => setMeetingType(e.target.value)} className="mr-2" /> Olağan Genel Kurul</label>
+          <label className="flex items-center cursor-pointer text-blue-900"><input type="radio" name="meetingType" value="olaganustu" checked={meetingType === 'olaganustu'} onChange={(e) => { setMeetingType(e.target.value); if (docType === 'yonetim' || docType === 'denetim') setDocType('cagri'); }} className="mr-2" /> Olağanüstü Genel Kurul</label>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 bg-slate-50 p-4 rounded-lg border border-slate-200">
+          <div><label className="block text-sm font-medium text-slate-700 mb-1">Toplantı Tarihi</label><input type="date" className="w-full border border-slate-300 rounded-lg px-3 py-2" value={meetingDate} onChange={e => setMeetingDate(e.target.value)} /></div>
+          <div><label className="block text-sm font-medium text-slate-700 mb-1">Toplantı Saati</label><input type="time" className="w-full border border-slate-300 rounded-lg px-3 py-2" value={meetingTime} onChange={e => setMeetingTime(e.target.value)} /></div>
+          <div><label className="block text-sm font-medium text-slate-700 mb-1">Toplantı Yeri</label><input type="text" placeholder="Örn: Sığınak, Toplantı Salonu" className="w-full border border-slate-300 rounded-lg px-3 py-2" value={meetingPlace} onChange={e => setMeetingPlace(e.target.value)} /></div>
+          {meetingType === 'olaganustu' && ( <div className="md:col-span-3 pt-2 border-t border-slate-200 mt-2"><label className="block text-sm font-medium text-slate-700 mb-1">Olağanüstü Gündem Konusu (Acil Durum)</label><input type="text" placeholder="Örn: Asansör revizyonu ve ek bütçe talebi" className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white" value={extraAgenda} onChange={e => setExtraAgenda(e.target.value)} /></div> )}
+        </div>
+
+        <div className="flex flex-wrap justify-between items-center gap-4">
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => setDocType('butce')} className={`px-4 py-2 rounded-lg font-medium transition-colors ${docType === 'butce' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>İşletme Projesi (Bütçe)</button>
+            <button onClick={() => setDocType('cagri')} className={`px-4 py-2 rounded-lg font-medium transition-colors ${docType === 'cagri' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Çağrı Dilekçesi</button>
+            <button onClick={() => setDocType('hazirun')} className={`px-4 py-2 rounded-lg font-medium transition-colors ${docType === 'hazirun' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Hazirun Listesi</button>
+            {meetingType === 'olagan' && (
+              <><button onClick={() => setDocType('yonetim')} className={`px-4 py-2 rounded-lg font-medium transition-colors ${docType === 'yonetim' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Yönetim Raporu</button><button onClick={() => setDocType('denetim')} className={`px-4 py-2 rounded-lg font-medium transition-colors ${docType === 'denetim' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Denetim Raporu</button></>
+            )}
+          </div>
+          <button onClick={() => handlePrint('printable-assembly-doc')} className="bg-slate-800 hover:bg-slate-900 text-white px-6 py-2 rounded-lg flex items-center shadow-sm transition-colors font-medium"><Printer size={18} className="mr-2" /> Belgeyi Yazdır</button>
+        </div>
+      </div>
+
+      {docType === 'butce' && (
+        <div className="bg-emerald-50 p-6 rounded-xl border border-emerald-100 no-print animate-in fade-in">
+          <div className="flex flex-col lg:flex-row justify-between lg:items-center mb-6 gap-4">
+            <div>
+              <h3 className="font-bold text-lg text-emerald-800 flex items-center"><Calculator className="mr-2" size={20}/> Akıllı Bütçe Planlayıcı</h3>
+              <p className="text-sm text-emerald-700 mt-1">Geçmiş verilerinizi ve "Sistem Ayarları"ndaki parametreleri kullanarak otomatik taslak oluşturur.</p>
+            </div>
+            <div className="flex gap-2">
+              <div className="bg-white px-3 py-1.5 rounded-lg border border-emerald-200 flex items-center">
+                <span className="text-sm text-emerald-700 font-medium mr-2">Enflasyon/Artış:</span>
+                <input type="number" className="w-16 border-none outline-none text-emerald-800 font-bold bg-transparent text-right" value={inflationRate} onChange={e => setInflationRate(e.target.value)} />
+                <span className="text-emerald-800 font-bold ml-1">%</span>
+              </div>
+              <button onClick={handleGenerateBudget} className="bg-emerald-600 text-white px-4 py-2 rounded-lg font-medium shadow-sm hover:bg-emerald-700 transition">Hesapla / Yenile</button>
+            </div>
+          </div>
+          
+          <div className="bg-white rounded-lg border border-emerald-200 overflow-hidden shadow-sm">
+            <table className="w-full text-left">
+              <thead className="bg-emerald-100/50 text-emerald-800 text-sm">
+                <tr>
+                  <th className="p-3 w-1/5">Gider Kalemi</th>
+                  <th className="p-3 w-1/6">Aylık Tutar (TL)</th>
+                  <th className="p-3 w-1/12 text-center">Ay</th>
+                  <th className="p-3 w-1/6">Yıllık Tutar (TL)</th>
+                  <th className="p-3">Dayanak / Açıklama</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-emerald-50">
+                {budgetItems.map(item => (
+                  <tr key={item.id} className="hover:bg-emerald-50/50 transition-colors">
+                    <td className="p-3 font-medium text-slate-700">{item.category}</td>
+                    <td className="p-3"><input type="number" className="w-full border border-slate-300 rounded px-3 py-1.5 focus:border-emerald-500 outline-none font-medium text-slate-800" value={item.monthlyAmount} onChange={e => handleBudgetChange(item.id, 'monthlyAmount', e.target.value)} /></td>
+                    <td className="p-3"><input type="number" className="w-full border border-slate-300 rounded px-2 py-1.5 focus:border-emerald-500 outline-none font-medium text-slate-800 text-center" value={item.months} onChange={e => handleBudgetChange(item.id, 'months', e.target.value)} /></td>
+                    <td className="p-3"><input type="number" className="w-full border border-slate-300 rounded px-3 py-1.5 focus:border-emerald-500 outline-none font-bold text-emerald-700" value={item.amount} onChange={e => handleBudgetChange(item.id, 'amount', e.target.value)} /></td>
+                    <td className="p-3"><input type="text" className="w-full border border-slate-300 rounded px-3 py-1.5 focus:border-emerald-500 outline-none text-sm text-slate-600" value={item.notes} onChange={e => handleBudgetChange(item.id, 'notes', e.target.value)} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* YAZDIRILACAK RESMİ EVRAKLAR */}
+      <div className="bg-white p-10 rounded-xl shadow-sm border border-slate-200" id="printable-assembly-doc">
+        
+        {docType === 'butce' && (
+          <div className="text-slate-900 leading-relaxed text-justify">
+             <h1 className="text-xl font-bold text-center mb-8 uppercase tracking-wide border-b-2 border-black pb-4">Yükseller Apartmanı Yeni Dönem<br/>Tahmini İşletme Projesi (Bütçe)</h1>
+             <p className="mb-6 text-right"><strong>Hazırlanma Tarihi:</strong> {new Date().toLocaleDateString('tr-TR')}</p>
+             <p className="mb-4"><strong>Sayın Kat Malikleri;</strong></p>
+             <p className="mb-6 indent-8">Kat mülkiyeti kanunu gereği, apartmanımızın önümüzdeki döneme ait tahmini gelir ve giderlerini belirlemek, hizmetlerin aksamadan yürütülmesini sağlamak amacıyla Yönetim Kurulumuzca hazırlanan İşletme Projesi aşağıda sunulmuştur. Bütçe hesaplamalarında geçmiş dönem gerçek verileri, asgari ücret öngörüleri ve güncel piyasa/enflasyon koşulları dikkate alınmıştır.</p>
+             
+             <h3 className="font-bold text-lg mb-3 underline">1. Tahmini Gider Tablosu</h3>
+             <table className="w-full text-left border-collapse border border-black mb-2 text-sm">
+                <thead><tr className="bg-slate-100">
+                  <th className="p-2 border border-black w-1/3">Gider Kalemi</th>
+                  <th className="p-2 border border-black w-1/3 text-center">Hesaplama (Aylık x Ay)</th>
+                  <th className="p-2 border border-black w-1/3 text-right">Yıllık Ödenek (TL)</th>
+                </tr></thead>
+                <tbody>
+                  {budgetItems.map(item => {
+                    const isEqualShare = item.category.includes('Maaş') || item.category.includes('Personel') || item.category.includes('Kıdem');
+                    return (
+                      <tr key={item.id} className={isEqualShare ? "bg-indigo-50/60" : "bg-emerald-50/60"}>
+                        <td className="p-2 border border-black font-medium">
+                          <div className="flex items-center justify-between">
+                            <span>{item.category}</span>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${isEqualShare ? 'bg-indigo-100 border-indigo-200 text-indigo-800' : 'bg-emerald-100 border-emerald-200 text-emerald-800'}`}>
+                              {isEqualShare ? 'Eşit' : 'Arsa Payı'}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="p-2 border border-black text-center text-slate-700 font-mono text-xs">{Number(item.monthlyAmount).toLocaleString('tr-TR')} TL x {item.months} Ay</td>
+                        <td className="p-2 border border-black text-right font-bold">{Number(item.amount).toLocaleString('tr-TR')} TL</td>
+                      </tr>
+                    );
+                  })}
+                  <tr className="bg-slate-200">
+                    <td colSpan="2" className="p-2 border border-black font-bold text-right">TOPLAM YILLIK GİDER:</td>
+                    <td className="p-2 border border-black font-bold text-right text-lg">{totalAnnualBudget.toLocaleString('tr-TR')} TL</td>
+                  </tr>
+                </tbody>
+             </table>
+             <div className="flex flex-wrap gap-4 mb-8 text-xs">
+                <div className="flex items-center"><span className="w-3 h-3 bg-indigo-100 border border-indigo-200 inline-block mr-1"></span> Eşit Dağıtılacak Giderler (KMK Md. 20/a)</div>
+                <div className="flex items-center"><span className="w-3 h-3 bg-emerald-100 border border-emerald-200 inline-block mr-1"></span> Arsa Payına Göre Dağıtılacak Giderler (KMK Md. 20/b)</div>
+             </div>
+
+             <h3 className="font-bold text-lg mb-3 underline">2. Gelir (Aidat) Dağılımı ve Tahsilat Planı (KMK Madde 20)</h3>
+             <p className="mb-4 text-sm indent-8">634 Sayılı Kat Mülkiyeti Kanunu Madde 20 gereğince; personel (Maaş/SGK vb.) giderleri bağımsız bölüm sayısına <strong>eşit</strong>, diğer tüm bakım, işletme ve onarım giderleri ise <strong>arsa payı oranına</strong> göre dağıtılmıştır.</p>
+
+             <div className="bg-slate-50 p-6 border border-black rounded-lg mb-8">
+                <div className="flex justify-between border-b border-slate-300 pb-2 mb-2">
+                  <span className="font-medium text-slate-600">Aylık Toplam Personel Gideri (Eşit Dağıtılacak):</span>
+                  <span className="font-bold">{personelMonthly.toLocaleString('tr-TR', { maximumFractionDigits: 2 })} TL</span>
+                </div>
+                <div className="flex justify-between border-b border-slate-300 pb-2 mb-2">
+                  <span className="font-medium text-slate-600">Aylık Toplam Diğer Giderler (Arsa Payına Göre Dağıtılacak):</span>
+                  <span className="font-bold">{otherMonthly.toLocaleString('tr-TR', { maximumFractionDigits: 2 })} TL</span>
+                </div>
+                
+                <table className="w-full mt-6 text-sm border-collapse border border-slate-300 bg-white">
+                  <thead className="bg-slate-200 text-slate-800">
+                    <tr><th className="p-2 border border-slate-300 text-left">Birim Tipi / Numarası</th><th className="p-2 border border-slate-300 text-center">Arsa Payı</th><th className="p-2 border border-slate-300 text-right">Önerilen Yeni Aylık Aidat</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr><td className="p-2 border border-slate-300">Konutlar (Daire 1-44 Arası Tümü)</td><td className="p-2 border border-slate-300 text-center text-slate-500">110 / 5741</td><td className="p-2 border border-slate-300 text-right font-bold text-slate-800">{calculateAidat(110).toLocaleString('tr-TR')} TL</td></tr>
+                    <tr><td className="p-2 border border-slate-300">Dükkan 45, 46</td><td className="p-2 border border-slate-300 text-center text-slate-500">140 / 5741</td><td className="p-2 border border-slate-300 text-right font-bold text-slate-800">{calculateAidat(140).toLocaleString('tr-TR')} TL</td></tr>
+                    <tr><td className="p-2 border border-slate-300">Dükkan 47, 48, 49</td><td className="p-2 border border-slate-300 text-center text-slate-500">70 / 5741</td><td className="p-2 border border-slate-300 text-right font-bold text-slate-800">{calculateAidat(70).toLocaleString('tr-TR')} TL</td></tr>
+                    <tr><td className="p-2 border border-slate-300">Dükkan 50</td><td className="p-2 border border-slate-300 text-center text-slate-500">90 / 5741</td><td className="p-2 border border-slate-300 text-right font-bold text-slate-800">{calculateAidat(90).toLocaleString('tr-TR')} TL</td></tr>
+                    <tr><td className="p-2 border border-slate-300">Dükkan 51</td><td className="p-2 border border-slate-300 text-center text-slate-500">321 / 5741</td><td className="p-2 border border-slate-300 text-right font-bold text-red-600">{calculateAidat(321).toLocaleString('tr-TR')} TL</td></tr>
+                  </tbody>
+                </table>
+             </div>
+             
+             <p className="mb-12 indent-8 text-sm italic">* İşbu işletme projesi kat malikleri kurulunda görüşülerek karara bağlanacak olup, onaylanması halinde tebliğ hükmünde sayılacaktır. Ortaya çıkabilecek olağanüstü ve mecburi tamiratlar (çatı, tesisat vs.) için ayrıca ek bütçe kararı alınabilecektir.</p>
+             <div className="text-right"><p className="font-bold mb-8">Yükseller Apartmanı Yönetim Kurulu</p><p className="border-t border-black pt-2 inline-block w-48 text-center">İmza</p></div>
+          </div>
+        )}
+
+        {docType === 'cagri' && (
+          <div className="text-slate-900 leading-relaxed">
+            <h1 className="text-xl font-bold text-center mb-8 uppercase tracking-wide border-b-2 border-black pb-4">Yükseller Apartmanı Kat Malikleri Kurulu<br/>{meetingType === 'olagan' ? 'Olağan' : 'Olağanüstü'} Genel Kurul Toplantı Çağrısı</h1>
+            <p className="mb-4 text-right"><strong>Tarih:</strong> {new Date().toLocaleDateString('tr-TR')}</p>
+            <p className="mb-6"><strong>Sayın Kat Maliki;</strong></p>
+            <p className="mb-4 indent-8 text-justify">{meetingType === 'olagan' ? 'Yükseller Apartmanı Kat Malikleri Kurulu, yıllık olağan toplantısını yapmak, geçmiş dönemi değerlendirmek ve yeni dönem bütçesi ile yönetimini belirlemek üzere aşağıda belirtilen gündem maddelerini görüşmek için toplanacaktır.' : 'Yükseller Apartmanı Kat Malikleri Kurulu, apartmanımızı ilgilendiren önemli ve acil konuları görüşmek ve karara bağlamak üzere aşağıda belirtilen gündem maddeleriyle olağanüstü toplanacaktır.'}</p>
+            <p className="mb-4 indent-8 text-justify">Toplantı <strong>{meetingDate ? new Date(meetingDate).toLocaleDateString('tr-TR') : '.../.../202..'}</strong> tarihinde, saat <strong>{meetingTime}</strong>'da <strong>{meetingPlace}</strong> adresinde yapılacaktır. Bu toplantıda yeterli çoğunluk sağlanamadığı takdirde, ikinci toplantı bir hafta sonra aynı yer ve saatte çoğunluk aranmaksızın yapılacaktır.</p>
+            <p className="mb-8 indent-8 text-justify">Kat Mülkiyeti Kanunu uyarınca alınacak kararlar tüm kat maliklerini bağlayacağından, toplantıya katılmanızı veya kendinizi bir vekille temsil ettirmenizi önemle rica ederiz.</p>
+            
+            <h2 className="font-bold text-lg mb-3 underline">GÜNDEM MADDELERİ:</h2>
+            {meetingType === 'olagan' ? (
+              <ol className="list-decimal pl-6 space-y-2 mb-12">
+                <li>Açılış, yoklama ve toplantı yeter sayısının tespiti.</li><li>Saygı duruşu ve Divan Heyeti'nin seçilmesi.</li><li>Divan Heyeti'ne toplantı tutanaklarını imzalama yetkisi verilmesi.</li><li>Geçmiş dönem Yönetim Kurulu Faaliyet Raporunun ve Denetim Kurulu Raporunun okunması.</li><li>Yönetim ve Denetim Kurullarının ayrı ayrı ibrası (aklanması).</li><li>Yeni dönem İşletme Projesi'nin görüşülmesi ve karara bağlanması.</li><li>Yeni dönem Yönetim ve Denetim Kurulu asil ve yedek üyelerinin seçimi.</li><li>Dilek, temenniler ve kapanış.</li>
+              </ol>
+            ) : (
+              <ol className="list-decimal pl-6 space-y-2 mb-12">
+                <li>Açılış, yoklama ve toplantı yeter sayısının tespiti.</li><li>Saygı duruşu ve Divan Heyeti'nin seçilmesi.</li><li>Divan Heyeti'ne toplantı tutanaklarını imzalama yetkisi verilmesi.</li><li><strong>{extraAgenda || '........................................................................'}</strong> konusunun görüşülerek karara bağlanması.</li><li>Dilek, temenniler ve kapanış.</li>
+              </ol>
+            )}
+            <div className="text-right mt-12"><p className="font-bold mb-8">Yükseller Apartmanı Yönetim Kurulu</p><p className="border-t border-black pt-2 inline-block w-48 text-center">İmza</p></div>
+          </div>
+        )}
+
+        {docType === 'hazirun' && (
+          <div className="text-slate-900">
+            <h1 className="text-lg font-bold text-center mb-6 uppercase tracking-wide border-b-2 border-black pb-2">Yükseller Apartmanı {meetingType === 'olagan' ? 'Olağan' : 'Olağanüstü'} Genel Kurul Hazirun Cetveli</h1>
+            <div className="flex justify-between text-sm mb-4 font-medium"><p><strong>Toplantı Tarihi:</strong> {meetingDate ? new Date(meetingDate).toLocaleDateString('tr-TR') : '...............'}</p><p><strong>Toplantı Yeri:</strong> {meetingPlace}</p></div>
+            <table className="w-full text-left border-collapse border border-black text-sm">
+              <thead><tr className="bg-slate-100"><th className="p-2 border border-black w-12 text-center">No</th><th className="p-2 border border-black w-32">Birim Adı</th><th className="p-2 border border-black">Malik Adı Soyadı</th><th className="p-2 border border-black w-32 text-center">Asaleten / Vekaleten</th><th className="p-2 border border-black w-32 text-center">İmza</th></tr></thead>
+              <tbody>
+                {units.map((unit, index) => ( <tr key={unit.id}><td className="p-2 border border-black text-center">{index + 1}</td><td className="p-2 border border-black font-medium">{unit.name}</td><td className="p-2 border border-black">{unit.ownerName || '....................................'}</td><td className="p-2 border border-black"></td><td className="p-2 border border-black h-10"></td></tr> ))}
+              </tbody>
+            </table>
+            <div className="mt-8 flex justify-between px-10">
+              <div className="text-center"><p className="font-bold mb-8">Divan Başkanı</p><p className="border-t border-black pt-2 w-32">İmza</p></div>
+              <div className="text-center"><p className="font-bold mb-8">Yazman</p><p className="border-t border-black pt-2 w-32">İmza</p></div>
+            </div>
+          </div>
+        )}
+
+        {docType === 'yonetim' && (
+          <div className="text-slate-900 leading-relaxed text-justify">
+            <h1 className="text-xl font-bold text-center mb-8 uppercase tracking-wide border-b-2 border-black pb-4">Yönetim Kurulu Faaliyet Raporu</h1>
+            <p className="mb-6 text-right"><strong>Tarih:</strong> {new Date().toLocaleDateString('tr-TR')}</p>
+            <p className="mb-4"><strong>Sayın Divan, Değerli Kat Malikleri;</strong></p>
+            <p className="mb-4 indent-8">Görevde bulunduğumuz hizmet dönemi içerisinde, sitemizin huzuru, güvenliği ve değerinin korunması amacıyla Kat Mülkiyeti Kanunu ve Yönetim Planı çerçevesinde çalışmalarımız titizlikle yürütülmüştür.</p>
+            <p className="mb-4 indent-8">Dönem içerisinde asansör bakımları periyodik olarak yaptırılmış, ortak alan temizlik ve aydınlatma giderleri zamanında karşılanmış, binamızın acil onarım gerektiren fiziki ihtiyaçlarına hızla müdahale edilmiştir. Finansal şeffaflık ilkesi gereği, gelir ve gider tablomuz aşağıda özetlenmiştir:</p>
+            <div className="my-8 flex justify-center">
+              <table className="w-3/4 text-left border-collapse border border-black">
+                <tbody>
+                  <tr><td className="p-3 border border-black font-semibold bg-slate-100">Dönem İçi Toplam Gelir (Tahsilat):</td><td className="p-3 border border-black text-right">{totalTahsilat.toLocaleString('tr-TR')} TL</td></tr>
+                  <tr><td className="p-3 border border-black font-semibold bg-slate-100">Dönem İçi Toplam Gider (Harcamalar):</td><td className="p-3 border border-black text-right">-{totalGider.toLocaleString('tr-TR')} TL</td></tr>
+                  <tr><td className="p-3 border border-black font-bold bg-slate-200">Kasa / Banka Devir Bakiyesi:</td><td className="p-3 border border-black text-right font-bold">{totalKasa.toLocaleString('tr-TR')} TL</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p className="mb-4 indent-8">Sitemizin ortak yaşama dair kurallarına riayet eden ve aidat ödemelerini düzenli yaparak yönetime destek olan tüm komşularımıza teşekkür ederiz. Bekleyen aidat ve faiz alacaklarının hukuki takibi yeni döneme devredilmiştir.</p>
+            <p className="mb-12 indent-8">Görev dönemimize ait hesap ve faaliyetlerimizi takdirlerinize sunar, Yönetim Kurulumuzun ibra edilmesini (aklanmasını) saygılarımızla arz ederiz.</p>
+            <div className="text-right"><p className="font-bold mb-8">Yönetim Kurulu Başkanı</p><p className="border-t border-black pt-2 inline-block w-48 text-center">İmza</p></div>
+          </div>
+        )}
+
+        {docType === 'denetim' && (
+          <div className="text-slate-900 leading-relaxed text-justify">
+            <h1 className="text-xl font-bold text-center mb-8 uppercase tracking-wide border-b-2 border-black pb-4">Denetim Kurulu Raporu</h1>
+            <p className="mb-6 text-right"><strong>Tarih:</strong> {new Date().toLocaleDateString('tr-TR')}</p>
+            <p className="mb-4"><strong>Yükseller Apartmanı Kat Malikleri Genel Kurul Başkanlığı'na;</strong></p>
+            <p className="mb-4 indent-8">Apartmanımız Yönetim Kurulu'nun, geçmiş çalışma dönemine ait hesapları, karar defteri, işletme defteri ile gelir-gider makbuzları ve faturaları kurulumuzca detaylı bir şekilde incelenmiştir.</p>
+            <p className="mb-4 indent-8">Yapılan denetimler sonucunda;</p>
+            <ul className="list-disc pl-10 mb-4 space-y-2">
+              <li>Karar defterinin usulüne uygun tutulduğu, kararların imza altına alındığı,</li><li>Gelirlerin makbuz veya banka dekontları karşılığında tahsil edildiği ve kayıtlara doğru geçirildiği,</li><li>Giderlerin tamamının fatura veya geçerli yasal belgelere dayandığı, harcamaların site menfaatine uygun olduğu,</li><li>Kasa ve banka kayıtları ile defter kayıtlarının birbirini tam olarak tuttuğu ({totalKasa.toLocaleString('tr-TR')} TL nakit mevcudu bulunduğu) tespit edilmiştir.</li>
+            </ul>
+            <p className="mb-4 indent-8">Yönetim Kurulunun, tahsil edilemeyen borçlara ilişkin Kat Mülkiyeti Kanunu Madde 20 uyarınca aylık %5 gecikme tazminatı işletme yükümlülüğünü yerine getirdiği görülmüştür.</p>
+            <p className="mb-12 indent-8">Netice olarak; dürüst, şeffaf ve başarılı bir yönetim sergileyen Yönetim Kurulunun hesap ve işlemlerinin usulüne uygun olduğu anlaşıldığından, Yönetim Kurulunun <strong>İBRA EDİLMESİNİ</strong> Genel Kurulun yüksek takdirlerine saygıyla arz ve teklif ederiz.</p>
+            <div className="text-right"><p className="font-bold mb-8">Denetim Kurulu Üyesi / Denetçi</p><p className="border-t border-black pt-2 inline-block w-48 text-center">İmza</p></div>
+          </div>
+        )}
       </div>
     </div>
   );
