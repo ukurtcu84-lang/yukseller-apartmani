@@ -679,15 +679,11 @@ function LoginScreen({ onLogin, units }) {
           <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition-colors mt-2 shadow-md">Sisteme Giriş Yap</button>
         </form>
 
-        <div className="mt-8 pt-6 border-t border-slate-100 text-center">
-          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-[0.2em]">
-            Developed by UKURTCU
-          </p>
-        </div>
+        
       </div>
       
       <p className="mt-6 text-[9px] text-slate-400 font-medium uppercase tracking-widest opacity-50">
-        v2.0 • Yükseller Management System
+        v2.0 • Ukurtcu Management System
       </p>
     </div>
   );
