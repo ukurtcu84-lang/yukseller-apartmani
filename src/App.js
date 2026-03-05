@@ -4,11 +4,11 @@ import {
   LogOut, Plus, FileText, CheckCircle, AlertCircle, Edit, Phone, User, 
   PieChart, Tag, Percent, History, Printer, BookOpen, ClipboardList, 
   Upload, Trash2, List, ChevronDown, ChevronUp, PlusCircle, X, Undo, Cpu,
-  Search, Filter, Lock, Calculator, Settings, Info
+  Search, Filter, Lock, Calculator, Settings, Info, MessageCircle
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
-import { getFirestore, collection, addDoc, getDocs, doc, deleteDoc, updateDoc, query, where } from "firebase/firestore";
+import { getFirestore, collection, addDoc, getDocs, doc, deleteDoc, updateDoc, query, where, setDoc, writeBatch, onSnapshot } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: "AIzaSyDdzNfCoIg_AKWZyRST7XsLnik18O6UjOE",
@@ -26,11 +26,9 @@ const db = getFirestore(app);
 // --- MOCK DATA OLUŞTURUCULAR ---
 const generateUnits = () => {
   const units = [];
-  // Konutlar (1-44) - Arsa Payı: 110
   for (let i = 1; i <= 44; i++) {
     units.push({ id: `Daire-${i}`, name: `Daire ${i}`, type: 'daire', residentStatus: 'owner', ownerName: `Malik ${i}`, ownerPhone: '', tenantName: '', tenantPhone: '', password: '1234', arsaPayi: 110 });
   }
-  // Dükkanlar (45-51) - Arsa Payları Değişken
   const dukkanPaylari = { 45: 140, 46: 140, 47: 70, 48: 70, 49: 70, 50: 90, 51: 321 };
   for (let i = 45; i <= 51; i++) {
     units.push({ id: `Dükkan-${i}`, name: `Dükkan ${i}`, type: 'dukkan', residentStatus: 'owner', ownerName: `Dükkan Sahibi ${i}`, ownerPhone: '', tenantName: '', tenantPhone: '', password: '1234', arsaPayi: dukkanPaylari[i] });
@@ -40,25 +38,19 @@ const generateUnits = () => {
 
 const EXPENSE_CATEGORIES = ['Elektrik', 'Su', 'Asansör', 'Temizlik', 'Maaş/SGK', 'Kıdem Tazminatı Fonu', 'Bakım/Onarım', 'Diğer'];
 
-const initialTransactions = [];
+const initialSettings = { grossMinimumWage: '', sgkEmployerRate: 16.75, unemploymentRate: 2, defaultInflationRate: '' };
 
-const initialSettings = {
-  grossMinimumWage: '',
-  sgkEmployerRate: 16.75,
-  unemploymentRate: 2,
-  defaultInflationRate: ''
-};
-
-// ==========================================
-// CENTRAL REDUCER (MERKEZİ DURUM YÖNETİMİ)
-// ==========================================
 const appReducer = (state, action) => {
   const createLog = (actionName, details, user) => ({ id: Date.now() + Math.random(), date: new Date().toISOString(), action: actionName, details, user });
 
   switch (action.type) {
-    case 'SET_TRANSACTIONS': {
-      return { ...state, transactions: action.payload };
+    case 'SET_TRANSACTIONS': return { ...state, transactions: action.payload };
+    case 'SET_UNITS': {
+      const fetchedMap = action.payload.reduce((acc, u) => { acc[u.id] = u; return acc; }, {});
+      const mergedUnits = state.units.map(u => fetchedMap[u.id] ? { ...u, ...fetchedMap[u.id] } : u);
+      return { ...state, units: mergedUnits };
     }
+    case 'SET_SETTINGS': return { ...state, settings: action.payload };
     case 'ADD_TRANSACTION': {
       const { transaction, user } = action.payload;
       const typeName = transaction.type === 'due' ? 'Borçlandırma' : transaction.type === 'payment' ? 'Tahsilat' : 'Gider';
@@ -143,19 +135,14 @@ const appReducer = (state, action) => {
         sysLogs: [createLog('AYAR GÜNCELLEME', `Sistem bütçe ve maaş parametreleri güncellendi.`, user), ...state.sysLogs]
       };
     }
-    case 'ADD_AUTO_TRANSACTIONS': {
-      return { ...state, transactions: [...state.transactions, ...action.payload] };
-    }
+    case 'ADD_AUTO_TRANSACTIONS': return { ...state, transactions: [...state.transactions, ...action.payload] };
     default: return state;
   }
 };
 
-
-// --- MERKEZİ YAZDIRMA (PRINT) MOTORU ---
 const handlePrint = (elementId) => {
   const el = document.getElementById(elementId);
   if (!el) return;
-
   const printWindow = window.open('', '_blank');
   if (printWindow) {
     printWindow.document.write(`
@@ -173,38 +160,16 @@ const handlePrint = (elementId) => {
               tr { page-break-inside: avoid; page-break-after: auto; }
               thead { display: table-header-group; }
               th, td { padding: 6px 8px !important; }
-              h1, h2, h3 { page-break-after: avoid; margin-top: 0 !important; }
-              .shadow-sm, .shadow-md, .shadow-lg, .shadow-xl { box-shadow: none !important; }
-              .overflow-x-auto, .overflow-y-auto { overflow: visible !important; max-height: none !important; }
-              .text-sm { font-size: 9pt !important; }
-              .text-xs { font-size: 8pt !important; }
             }
-            @media screen {
-              .print-only { display: none !important; }
-            }
-            body { padding: 0; background: white; color: black; font-family: sans-serif; }
           </style>
         </head>
-        <body>
-          ${el.innerHTML}
-          <script>
-            setTimeout(() => {
-              window.print();
-              window.close();
-            }, 1000);
-          </script>
-        </body>
+        <body>${el.innerHTML}<script>setTimeout(() => {window.print(); window.close();}, 1000);</script></body>
       </html>
     `);
     printWindow.document.close();
-  } else {
-    el.classList.add('print-target');
-    try { window.print(); } catch(e) {}
-    setTimeout(() => el.classList.remove('print-target'), 500);
   }
 };
 
-// --- MERKEZİ HESAPLAMA MOTORU ---
 const getBalances = (txs, units) => {
   let totalKasa = 0, totalGider = 0, totalBekleyenAidat = 0, totalBekleyenFaiz = 0, totalBekleyenDemirbas = 0, totalBekleyenEkstra = 0, totalBekleyenOzel = 0; 
   const unitBalances = {};
@@ -223,21 +188,11 @@ const getBalances = (txs, units) => {
 
   Object.values(unitBalances).forEach(details => {
     let remainingPayment = details.payment;
-
-    if (remainingPayment >= details.penalty) { details.penaltyBalance = 0; remainingPayment -= details.penalty; }
-    else { details.penaltyBalance = details.penalty - remainingPayment; remainingPayment = 0; }
-
-    if (remainingPayment >= details.due) { details.dueBalance = 0; remainingPayment -= details.due; }
-    else { details.dueBalance = details.due - remainingPayment; remainingPayment = 0; }
-    
-    if (remainingPayment >= details.fixture) { details.fixtureBalance = 0; remainingPayment -= details.fixture; }
-    else { details.fixtureBalance = details.fixture - remainingPayment; remainingPayment = 0; }
-
-    if (remainingPayment >= details.extra) { details.extraBalance = 0; remainingPayment -= details.extra; }
-    else { details.extraBalance = details.extra - remainingPayment; remainingPayment = 0; }
-
-    if (remainingPayment >= details.custom) { details.customBalance = 0; remainingPayment -= details.custom; }
-    else { details.customBalance = details.custom - remainingPayment; remainingPayment = 0; }
+    if (remainingPayment >= details.penalty) { details.penaltyBalance = 0; remainingPayment -= details.penalty; } else { details.penaltyBalance = details.penalty - remainingPayment; remainingPayment = 0; }
+    if (remainingPayment >= details.due) { details.dueBalance = 0; remainingPayment -= details.due; } else { details.dueBalance = details.due - remainingPayment; remainingPayment = 0; }
+    if (remainingPayment >= details.fixture) { details.fixtureBalance = 0; remainingPayment -= details.fixture; } else { details.fixtureBalance = details.fixture - remainingPayment; remainingPayment = 0; }
+    if (remainingPayment >= details.extra) { details.extraBalance = 0; remainingPayment -= details.extra; } else { details.extraBalance = details.extra - remainingPayment; remainingPayment = 0; }
+    if (remainingPayment >= details.custom) { details.customBalance = 0; remainingPayment -= details.custom; } else { details.customBalance = details.custom - remainingPayment; remainingPayment = 0; }
 
     details.balance = details.dueBalance + details.fixtureBalance + details.extraBalance + details.customBalance + details.penaltyBalance;
 
@@ -251,7 +206,6 @@ const getBalances = (txs, units) => {
   return { totalKasa, totalGider, totalBekleyenAidat, totalBekleyenDemirbas, totalBekleyenEkstra, totalBekleyenOzel, totalBekleyenFaiz, unitBalances };
 };
 
-// --- OTONOM FAİZ MOTORU ---
 const runAutoPenalties = (currentTransactions, currentUnits) => {
   if (currentTransactions.length === 0) return [];
   const sortedTxs = [...currentTransactions].sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -283,10 +237,7 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
         
         if (principal > 0) {
           const pAmount = Number((principal * 0.05).toFixed(2));
-          const pTx = {
-            id: `auto-${year}-${month}-${unit.id}-${Math.random()}`,
-            date: penaltyApplicationDate.toISOString(), type: 'penalty', amount: pAmount, unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, groupId: groupId
-          };
+          const pTx = { id: `auto-${year}-${month}-${unit.id}-${Math.random()}`, date: penaltyApplicationDate.toISOString(), type: 'penalty', amount: pAmount, unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, groupId: groupId };
           newPenalties.push(pTx); simulatedTxs.push(pTx); monthHasPenalty = true;
         }
       });
@@ -301,7 +252,6 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
   return newPenalties;
 };
 
-// --- OTONOM HATIRLATMA MOTORU ---
 const runAutoReminders = (currentTransactions, currentUnits) => {
   if (currentTransactions.length === 0) return [];
   const now = new Date();
@@ -348,7 +298,7 @@ export default function App() {
 
   const [state, dispatch] = useReducer(appReducer, {
     units: generateUnits(),
-    transactions: initialTransactions,
+    transactions: [],
     sysLogs: [{ id: 1, date: new Date().toISOString(), action: 'SİSTEM BAŞLATILDI', details: 'Apartman yönetim sistemi aktif edildi.', user: 'Sistem' }],
     settings: initialSettings
   });
@@ -365,25 +315,46 @@ export default function App() {
     return () => window.removeEventListener('wheel', handleWheel);
   }, []);
 
+  // --- BULUTTAN (FİREBASE) CANLI VERİ DİNLEME ---
   useEffect(() => {
-    const fetchTransactions = async () => {
-      try {
-        const querySnapshot = await getDocs(collection(db, "transactions"));
-        const fetchedTxs = [];
-        querySnapshot.forEach((doc) => {
-          fetchedTxs.push({ id: doc.id, ...doc.data() });
-        });
-        
-        // Verileri tarihe göre yeniden eskiye sıralayalım
-        fetchedTxs.sort((a, b) => new Date(b.date) - new Date(a.date));
-        
-        dispatch({ type: 'SET_TRANSACTIONS', payload: fetchedTxs });
-      } catch (e) {
-        console.error("Buluttan veriler çekilemedi:", e);
-      }
-    };
+    // İşlemleri Canlı Dinle
+    const unsubTxs = onSnapshot(collection(db, "transactions"), (snapshot) => {
+      const fetchedTxs = [];
+      snapshot.forEach((doc) => fetchedTxs.push({ id: doc.id, ...doc.data() }));
+      fetchedTxs.sort((a, b) => new Date(b.date) - new Date(a.date));
+      dispatch({ type: 'SET_TRANSACTIONS', payload: fetchedTxs });
+    }, (error) => console.error("İşlemler dinlenemedi:", error));
 
-    fetchTransactions();
+    // Birimleri (Kişileri) Canlı Dinle
+    const unsubUnits = onSnapshot(collection(db, "units"), (snapshot) => {
+      if (!snapshot.empty) {
+        const fetchedUnits = [];
+        snapshot.forEach((doc) => fetchedUnits.push(doc.data()));
+        dispatch({ type: 'SET_UNITS', payload: fetchedUnits });
+      }
+    }, (error) => {
+      console.error("Kişiler dinlenemedi:", error);
+      alert("DİKKAT: Firebase İzinleri Açık Değil! Verileriniz kalıcı olarak kaydedilmeyecektir. Lütfen Firebase Rules kısmını güncelleyin.");
+    });
+
+    // Ayarları Canlı Dinle
+    const unsubSettings = onSnapshot(collection(db, "settings"), (snapshot) => {
+      if (!snapshot.empty) {
+        let fetchedSettings = null;
+        snapshot.forEach((doc) => {
+          if (doc.id === 'general') fetchedSettings = doc.data();
+        });
+        if (fetchedSettings) {
+          dispatch({ type: 'SET_SETTINGS', payload: fetchedSettings });
+        }
+      }
+    }, (error) => console.error("Ayarlar dinlenemedi:", error));
+
+    return () => {
+      unsubTxs();
+      unsubUnits();
+      unsubSettings();
+    };
   }, []);
 
   const computations = useMemo(() => getBalances(transactions, units), [transactions, units]);
@@ -419,35 +390,66 @@ export default function App() {
 
   const addTransaction = async (transaction) => {
     try {
-      // 1. Önce Firebase'e (Buluta) kaydet
       const docRef = await addDoc(collection(db, "transactions"), {
-        ...transaction,
-        date: transaction.date || new Date().toISOString(),
-        addedBy: getUserName()
+        ...transaction, date: transaction.date || new Date().toISOString(), addedBy: getUserName()
       });
-
-      // 2. Sonra anında ekranda görünmesi için sistemi güncelle
       const newTx = { ...transaction, id: docRef.id };
       dispatch({ type: 'ADD_TRANSACTION', payload: { transaction: newTx, user: getUserName() }});
-      
-    } catch (e) {
-      console.error("Buluta kaydederken hata oluştu: ", e);
-      alert("Kayıt sırasında bir hata oluştu, internet bağlantınızı kontrol edin.");
-    }
+    } catch (e) { console.error("Buluta kaydederken hata oluştu: ", e); }
   };
   const addBulkTransactions = (txsArray) => dispatch({ type: 'ADD_BULK_TRANSACTIONS', payload: { transactions: txsArray, user: getUserName() }});
   const addBulkDue = (type, daireAmount, dukkanAmounts, description) => dispatch({ type: 'ADD_BULK_DUE', payload: { type, daireAmount, dukkanAmounts, description, user: getUserName() }});
-  const onUpdateUnit = (updatedUnit) => dispatch({ type: 'UPDATE_UNIT', payload: { updatedUnit, user: getUserName() }});
-  const onUpdateBulkUnits = (updatedUnits) => dispatch({ type: 'UPDATE_BULK_UNITS', payload: { updatedUnits, user: getUserName() }});
+  
+  // BİRİMLERİ BULUTA KAYDET
+  const onUpdateUnit = async (updatedUnit) => {
+    try {
+      await setDoc(doc(db, "units", String(updatedUnit.id)), updatedUnit, { merge: true });
+      dispatch({ type: 'UPDATE_UNIT', payload: { updatedUnit, user: getUserName() }});
+      return true;
+    } catch (e) { 
+      console.error("Kişi buluta kaydedilemedi:", e); 
+      alert("KAYIT BAŞARISIZ! Lütfen Firebase 'Rules' izinlerinizi güncelleyin.");
+      return false;
+    }
+  };
+
+  // TOPLU BİRİMLERİ BULUTA KAYDET
+  const onUpdateBulkUnits = async (updatedUnits) => {
+    try {
+      const batch = writeBatch(db);
+      updatedUnits.forEach(u => {
+        const ref = doc(db, "units", String(u.id));
+        batch.set(ref, u, { merge: true });
+      });
+      await batch.commit();
+      dispatch({ type: 'UPDATE_BULK_UNITS', payload: { updatedUnits, user: getUserName() }});
+      return true;
+    } catch (e) { 
+      console.error("Kişiler toplu olarak buluta kaydedilemedi:", e); 
+      alert("KAYIT BAŞARISIZ! Lütfen Firebase 'Rules' izinlerinizi güncelleyin.");
+      return false;
+    }
+  };
+
   const onEditTransaction = async (id, updatedData) => {
     try {
       await updateDoc(doc(db, "transactions", id), updatedData);
       dispatch({ type: 'EDIT_TRANSACTION', payload: { id, updatedData, user: getUserName() }});
-    } catch (e) {
-      console.error("Bulutta güncellenirken hata:", e);
+    } catch (e) { console.error("Bulutta güncellenirken hata:", e); }
+  };
+
+  // AYARLARI BULUTA KAYDET
+  const onUpdateSettings = async (newSettings) => {
+    try {
+      await setDoc(doc(db, "settings", "general"), newSettings, { merge: true });
+      dispatch({ type: 'UPDATE_SETTINGS', payload: { newSettings, user: getUserName() }});
+      return true;
+    } catch (e) { 
+      console.error("Ayarlar buluta kaydedilemedi:", e); 
+      alert("KAYIT BAŞARISIZ! Lütfen Firebase 'Rules' izinlerinizi güncelleyin.");
+      return false;
     }
   };
-  const onUpdateSettings = (newSettings) => dispatch({ type: 'UPDATE_SETTINGS', payload: { newSettings, user: getUserName() }});
 
   const [deleteDialog, setDeleteDialog] = useState({ isOpen: false, id: null, isGroup: false });
   const [adminPassword, setAdminPassword] = useState('');
@@ -456,6 +458,7 @@ export default function App() {
   const deleteTransaction = (id) => { setDeleteDialog({ isOpen: true, id, isGroup: false }); setAdminPassword(''); setPasswordError(''); };
   const deleteTransactionGroup = (groupId) => { setDeleteDialog({ isOpen: true, id: groupId, isGroup: true }); setAdminPassword(''); setPasswordError(''); };
   const deleteMultipleTransactions = (ids) => { setDeleteDialog({ isOpen: true, id: ids, isGroup: false }); setAdminPassword(''); setPasswordError(''); };
+
   const executeDelete = async (e) => {
     e.preventDefault();
     if (adminPassword === "200584") {
@@ -466,16 +469,12 @@ export default function App() {
           snapshot.forEach(async (docItem) => {
             await deleteDoc(doc(db, "transactions", docItem.id));
           });
-          dispatch({ type: 'DELETE_TRANSACTION_GROUP', payload: { groupId: deleteDialog.id, user: getUserName() } });
         } else if (Array.isArray(deleteDialog.id)) {
-          // YENİ: ÇOKLU SİLME İŞLEMİ
           for (const tId of deleteDialog.id) {
             await deleteDoc(doc(db, "transactions", tId));
-            dispatch({ type: 'DELETE_TRANSACTION', payload: { id: tId, user: getUserName() } });
           }
         } else {
           await deleteDoc(doc(db, "transactions", deleteDialog.id));
-          dispatch({ type: 'DELETE_TRANSACTION', payload: { id: deleteDialog.id, user: getUserName() } });
         }
         setDeleteDialog({ isOpen: false, id: null, isGroup: false });
       } catch (error) {
@@ -563,11 +562,6 @@ export default function App() {
                 <button type="submit" className="flex-1 bg-red-600 text-white py-2 rounded-lg hover:bg-red-700 font-medium shadow-sm transition-colors">Onayla ve Sil</button>
               </div>
             </form>
-            <div className="mt-8 pt-6 border-t border-slate-100 text-center">
-  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-[0.2em]">
-    Developed by Ukurtcu©
-  </p>
-</div>
           </div>
         </div>
       )}
@@ -575,9 +569,6 @@ export default function App() {
   );
 }
 
-// ==========================================
-// 1. GİRİŞ EKRANI (ŞİFRELİ)
-// ==========================================
 // ==========================================
 // 1. GİRİŞ EKRANI (ŞİFRELİ)
 // ==========================================
@@ -633,7 +624,6 @@ function LoginScreen({ onLogin, units }) {
           <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition-colors mt-2 shadow-md">Sisteme Giriş Yap</button>
         </form>
 
-        {/* UKURTCU İMZASI BURADA */}
         <div className="mt-8 pt-6 border-t border-slate-100 text-center">
           <p className="text-[10px] text-slate-400 font-bold uppercase tracking-[0.2em]">
             Developed by UKURTCU
@@ -641,9 +631,8 @@ function LoginScreen({ onLogin, units }) {
         </div>
       </div>
       
-      {/* İSTERSEN KUTUNUN DIŞINA DAHA SİLİK BİR TANE DAHA EKLEYEBİLİRİZ */}
       <p className="mt-6 text-[9px] text-slate-400 font-medium uppercase tracking-widest opacity-50">
-        v2.0 • Ukurtcu Management System©
+        v2.0 • Yükseller Management System
       </p>
     </div>
   );
@@ -693,11 +682,6 @@ function AdminDashboard({ units, transactions, sysLogs, computations, lastBilled
           {activeTab === 'assembly' && <AdminAssembly units={units} computations={computations} transactions={transactions} settings={settings} />}
           {activeTab === 'history' && <AdminHistoryTabs transactions={transactions} sysLogs={sysLogs} onDeleteTransaction={onDeleteTransaction} onDeleteTransactionGroup={onDeleteTransactionGroup} onDeleteMultipleTransactions={onDeleteMultipleTransactions} />}
           {activeTab === 'settings' && <AdminSettings settings={settings} onUpdateSettings={onUpdateSettings} />}
-          <div className="mt-8 pb-4 text-center border-t border-slate-200 pt-4 no-print">
-  <p className="text-xs text-slate-400 font-medium tracking-widest uppercase">
-    © 2026 Yükseller Apartmanı • <span className="text-slate-500">Geliştiren: Ukurtcu © </span>
-  </p>
-</div>
         </div>
       </div>
     </div>
@@ -722,10 +706,14 @@ function AdminSettings({ settings, onUpdateSettings }) {
     setFormData({ ...formData, [e.target.name]: val === '' ? '' : Number(val) });
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    onUpdateSettings(formData);
-    setSysMessage({ text: 'Sistem parametreleri başarıyla güncellendi.', type: 'success' });
+    const success = await onUpdateSettings(formData);
+    if (success) {
+      setSysMessage({ text: 'Sistem parametreleri başarıyla güncellendi.', type: 'success' });
+    } else {
+      setSysMessage({ text: 'Hata! Parametreler kaydedilemedi. Firebase kurallarını kontrol edin.', type: 'error' });
+    }
     setTimeout(() => setSysMessage(null), 4000);
   };
 
@@ -733,7 +721,7 @@ function AdminSettings({ settings, onUpdateSettings }) {
     <div className="space-y-6">
       {sysMessage && (
         <div className={`p-4 rounded-lg flex items-center shadow-md mb-4 ${sysMessage.type === 'error' ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}>
-          <CheckCircle className="mr-2" size={20} /><span className="font-medium">{sysMessage.text}</span>
+          {sysMessage.type === 'error' ? <AlertCircle className="mr-2" size={20} /> : <CheckCircle className="mr-2" size={20} />}<span className="font-medium">{sysMessage.text}</span>
         </div>
       )}
 
@@ -789,6 +777,12 @@ function AdminSettings({ settings, onUpdateSettings }) {
           </button>
         </form>
       </div>
+
+      <div className="mt-8 pb-4 text-center border-t border-slate-200 pt-4 no-print">
+        <p className="text-xs text-slate-400 font-medium tracking-widest uppercase">
+          © 2026 Yükseller Apartmanı • <span className="text-slate-500">Geliştiren: UKURTCU</span>
+        </p>
+      </div>
     </div>
   );
 }
@@ -831,7 +825,6 @@ function AdminOverview({ computations, allTransactions, units }) {
 
   return (
     <div className="space-y-6">
-      {/* EKRAN İÇİN ÜST KARTLAR (Yazdırırken gizlenecek) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 no-print">
         <StatCard title="Kasa Durumu" amount={totalKasa} type={totalKasa >= 0 ? 'positive' : 'negative'} icon={<Wallet />} />
         <StatCard title="Bekleyen Alacaklar" amount={totalBekleyenTumu} type="warning" icon={<AlertCircle />} />
@@ -839,8 +832,6 @@ function AdminOverview({ computations, allTransactions, units }) {
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden" id="overview-print">
-        
-        {/* KAPSAYICI RAPOR BÖLÜMÜ (Ekran ve Yazdırma için ortak) */}
         <div className="p-6 sm:p-8">
           <div className="flex justify-between items-center mb-6 border-b-2 border-slate-800 pb-4">
             <div>
@@ -850,7 +841,6 @@ function AdminOverview({ computations, allTransactions, units }) {
             <button onClick={() => handlePrint('overview-print')} className="no-print bg-slate-800 text-white px-5 py-2.5 rounded-lg flex items-center hover:bg-slate-900 font-bold transition-colors shadow-sm"><Printer size={18} className="mr-2"/> Raporu Yazdır</button>
           </div>
 
-          {/* ANA METRİKLER */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
             <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-center">
               <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Mevcut Kasa</p>
@@ -870,10 +860,7 @@ function AdminOverview({ computations, allTransactions, units }) {
             </div>
           </div>
 
-          {/* DETAYLI ANALİZLER */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            
-            {/* SOL KOLON: ALACAKLAR VE BİRİMLER */}
             <div className="space-y-6">
               <div>
                 <h3 className="text-lg font-bold text-slate-800 mb-3 flex items-center border-b border-slate-200 pb-2"><AlertCircle className="mr-2 text-orange-500" size={20}/> Bekleyen Alacak Dağılımı</h3>
@@ -903,7 +890,6 @@ function AdminOverview({ computations, allTransactions, units }) {
               </div>
             </div>
 
-            {/* SAĞ KOLON: GİDERLER */}
             <div>
               <h3 className="text-lg font-bold text-slate-800 mb-3 flex items-center border-b border-slate-200 pb-2"><TrendingDown className="mr-2 text-red-500" size={20}/> Gider Kalemleri Dağılımı</h3>
               {Object.keys(expensesByCategory).length === 0 ? (
@@ -928,11 +914,9 @@ function AdminOverview({ computations, allTransactions, units }) {
                 </div>
               )}
             </div>
-
           </div>
         </div>
 
-        {/* SON İŞLEMLER - SADECE EKRANDA GÖRÜNECEK (Yazdırırken gizlenecek) */}
         <div className="no-print border-t border-slate-200">
           <div className="px-6 py-4 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-50">
             <h2 className="text-lg font-semibold text-slate-800 flex items-center"><History className="mr-2 text-slate-500" size={18}/> Son İşlemler (Sadece Ekranda Görünür)</h2>
@@ -1027,9 +1011,8 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
   const [editingTxId, setEditingTxId] = useState(null);
   const [editTxFormData, setEditTxFormData] = useState({});
 
-  // FİLTRE DURUMLARI
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterStatus, setFilterStatus] = useState('all'); // all, debt, nodebt
+  const [filterStatus, setFilterStatus] = useState('all'); 
   const [ekstreSearchTerm, setEkstreSearchTerm] = useState('');
   const [ekstreFilterType, setEkstreFilterType] = useState('all');
   const [ekstreStartDate, setEkstreStartDate] = useState('');
@@ -1092,7 +1075,17 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
     }
   };
 
-  const handleEditSubmit = (e) => { e.preventDefault(); onUpdateUnit(editFormData); closeInlineAction(); showMessage("Birim bilgileri ve şifre başarıyla güncellendi."); };
+  const handleEditSubmit = async (e) => { 
+    e.preventDefault(); 
+    const success = await onUpdateUnit(editFormData); 
+    if (success) {
+      closeInlineAction(); 
+      showMessage("Birim bilgileri ve şifre başarıyla güncellendi."); 
+    } else {
+      showMessage("Firebase izin hatası! Kaydedilemedi.", "error");
+    }
+  };
+  
   const handleAddDueSubmit = (e) => {
     e.preventDefault();
     if(addDueAmount && addDueDesc && activeAction) {
@@ -1137,7 +1130,6 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
     lines.forEach((line, index) => {
       if(!line.trim()) return;
       const cols = line.split(/\t|;/);
-      // Eksik sütun ihtimaline karşı diziyi 6 elemana tamamla
       while(cols.length < 6) cols.push('');
 
       let rawUnit = cols[0].trim();
@@ -1148,45 +1140,31 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
       let rawPass = cols[5].trim();
       
       const matchedUnit = units.find(u => u.name.toLowerCase() === rawUnit.toLowerCase() || u.id.toLowerCase() === rawUnit.toLowerCase().replace(' ', '-') || u.name.toLowerCase().replace(' ', '') === rawUnit.toLowerCase().replace(' ', ''));
-      
-      // Kiracı adı doluysa kiracı oturuyor, boşsa malik oturuyor olarak kabul et
       let residentStatus = rawTenantName.length > 0 ? 'tenant' : 'owner';
       
       parsed.push({ 
-        id: index, 
-        rawUnit, 
-        unitId: matchedUnit ? matchedUnit.id : null, 
-        unitName: matchedUnit ? matchedUnit.name : 'Bilinmiyor', 
-        residentStatus,
-        ownerName: rawOwnerName,
-        ownerPhone: rawOwnerPhone,
-        tenantName: rawTenantName,
-        tenantPhone: rawTenantPhone,
-        password: rawPass || '1234',
-        isValid: !!matchedUnit && (rawOwnerName.length > 0 || rawTenantName.length > 0)
+        id: index, rawUnit, unitId: matchedUnit ? matchedUnit.id : null, unitName: matchedUnit ? matchedUnit.name : 'Bilinmiyor', residentStatus, ownerName: rawOwnerName, ownerPhone: rawOwnerPhone, tenantName: rawTenantName, tenantPhone: rawTenantPhone, password: rawPass || '1234', isValid: !!matchedUnit && (rawOwnerName.length > 0 || rawTenantName.length > 0)
       });
     });
     setUnitImportPreview(parsed);
   };
 
-  const handleUnitImportSubmit = () => {
+  const handleUnitImportSubmit = async () => {
     const validUnits = unitImportPreview.filter(p => p.isValid).map(p => {
       const existingUnit = units.find(u => u.id === p.unitId);
       return { 
-        ...existingUnit, 
-        residentStatus: p.residentStatus, 
-        ownerName: p.ownerName,
-        ownerPhone: p.ownerPhone,
-        tenantName: p.tenantName,
-        tenantPhone: p.tenantPhone,
-        password: p.password 
+        ...existingUnit, residentStatus: p.residentStatus, ownerName: p.ownerName, ownerPhone: p.ownerPhone, tenantName: p.tenantName, tenantPhone: p.tenantPhone, password: p.password 
       };
     });
 
     if(validUnits.length > 0) {
-      onUpdateBulkUnits(validUnits); 
-      showMessage(`${validUnits.length} adet birimin bilgileri başarıyla güncellendi.`);
-      setShowUnitImportModal(false); setUnitImportText(''); setUnitImportPreview(null);
+      const success = await onUpdateBulkUnits(validUnits); 
+      if(success) {
+        showMessage(`${validUnits.length} adet birimin bilgileri başarıyla güncellendi.`);
+        setShowUnitImportModal(false); setUnitImportText(''); setUnitImportPreview(null);
+      } else {
+        showMessage("Firebase izin hatası! Kaydedilemedi.", "error");
+      }
     } else showMessage("Güncellenecek geçerli kayıt bulunamadı.", "error");
   };
 
@@ -1451,16 +1429,14 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                   <div className="bg-slate-50 p-4 rounded-lg space-y-3">
                                     <h4 className="font-semibold text-slate-700">Mal Sahibi Bilgileri</h4>
-                                    <input type="text" placeholder="Ad Soyad" required value={editFormData.ownerName} onChange={(e) => setEditFormData({...editFormData, ownerName: e.target.value})} className="border border-slate-300 rounded-lg px-3 py-2 w-full bg-white" />
-                                    <input type="text" placeholder="Telefon" value={editFormData.ownerPhone} onChange={(e) => setEditFormData({...editFormData, ownerPhone: e.target.value})} className="border border-slate-300 rounded-lg px-3 py-2 w-full bg-white" />
+                                    <input type="text" placeholder="Ad Soyad" required value={editFormData.ownerName || ''} onChange={(e) => setEditFormData({...editFormData, ownerName: e.target.value})} className="border border-slate-300 rounded-lg px-3 py-2 w-full bg-white" />
+                                    <input type="text" placeholder="Telefon" value={editFormData.ownerPhone || ''} onChange={(e) => setEditFormData({...editFormData, ownerPhone: e.target.value})} className="border border-slate-300 rounded-lg px-3 py-2 w-full bg-white" />
                                   </div>
-                                  {editFormData.residentStatus === 'tenant' && (
-                                    <div className="bg-blue-50 p-4 rounded-lg space-y-3">
-                                      <h4 className="font-semibold text-blue-800">Kiracı Bilgileri</h4>
-                                      <input type="text" placeholder="Ad Soyad" required value={editFormData.tenantName} onChange={(e) => setEditFormData({...editFormData, tenantName: e.target.value})} className="border border-blue-300 rounded-lg px-3 py-2 w-full bg-white" />
-                                      <input type="text" placeholder="Telefon" value={editFormData.tenantPhone} onChange={(e) => setEditFormData({...editFormData, tenantPhone: e.target.value})} className="border border-blue-300 rounded-lg px-3 py-2 w-full bg-white" />
-                                    </div>
-                                  )}
+                                  <div className="bg-blue-50 p-4 rounded-lg space-y-3">
+                                    <h4 className="font-semibold text-blue-800">Kiracı Bilgileri</h4>
+                                    <input type="text" placeholder="Ad Soyad" value={editFormData.tenantName || ''} onChange={(e) => setEditFormData({...editFormData, tenantName: e.target.value})} className="border border-blue-300 rounded-lg px-3 py-2 w-full bg-white" />
+                                    <input type="text" placeholder="Telefon" value={editFormData.tenantPhone || ''} onChange={(e) => setEditFormData({...editFormData, tenantPhone: e.target.value})} className="border border-blue-300 rounded-lg px-3 py-2 w-full bg-white" />
+                                  </div>
                                   <div className="bg-amber-50 p-4 rounded-lg space-y-3 border border-amber-200 md:col-span-2">
                                     <h4 className="font-semibold text-amber-800 flex items-center"><Lock size={16} className="mr-2"/> Sistem Giriş Şifresi</h4>
                                     <div className="flex items-center space-x-4">
@@ -1576,7 +1552,6 @@ function AdminExpenses({ transactions, onAddTransaction, onAddBulkTransactions }
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   
-  // TOPLU YÜKLEME DURUMLARI
   const [showImportModal, setShowImportModal] = useState(false);
   const [importText, setImportText] = useState('');
   const [importPreview, setImportPreview] = useState(null);
@@ -1810,7 +1785,6 @@ function AdminHistoryTabs({ transactions, sysLogs, onDeleteTransaction, onDelete
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('all');
   
-  // YENİ: ÇOKLU SEÇİM HAFIZASI
   const [selectedIds, setSelectedIds] = useState(new Set());
 
   const toggleSelection = (id) => {
@@ -2000,6 +1974,60 @@ function AdminHistoryTabs({ transactions, sysLogs, onDeleteTransaction, onDelete
 }
 
 // ==========================================
+// 8. DENETÇİ RAPORU (Sadece Görüntüleme)
+// ==========================================
+function AdminReport({ computations, transactions }) {
+  const { totalKasa } = computations;
+  
+  return (
+    <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200" id="auditor-report-print">
+      <div className="flex justify-between items-center mb-8 border-b-2 border-slate-800 pb-4">
+        <div>
+          <h2 className="text-2xl font-bold uppercase tracking-wide text-slate-800">Yönetim Kurulu Faaliyet & Denetim Raporu</h2>
+          <p className="text-slate-600 mt-1">Yükseller Apartmanı • Rapor Tarihi: {new Date().toLocaleDateString('tr-TR')}</p>
+        </div>
+        <button onClick={() => handlePrint('auditor-report-print')} className="no-print bg-slate-800 text-white px-5 py-2.5 rounded-lg flex items-center hover:bg-slate-900 font-bold transition-colors shadow-sm"><Printer size={18} className="mr-2"/> Raporu Yazdır</button>
+      </div>
+
+      <div className="space-y-6 text-slate-700 leading-relaxed text-justify">
+        <p className="indent-8">Sayın Kat Malikleri;</p>
+        <p className="indent-8">Yükseller Apartmanı Yönetim Kurulunun, geride bıraktığımız döneme ait gelir-gider hesapları, banka ve kasa hareketleri ile karar defteri, tarafımızca detaylı bir şekilde incelenmiştir.</p>
+        <p className="indent-8">Yapılan denetimler sonucunda;</p>
+        <ul className="list-disc pl-10 space-y-2">
+          <li>Karar defterinin usulüne uygun tutulduğu, alınan kararların deftere işlenerek imza altına alındığı,</li>
+          <li>Toplanan aidat ve demirbaş gelirlerinin makbuz veya banka dekontları karşılığında tahsil edildiği ve kayıtlara eksiksiz geçirildiği,</li>
+          <li>Yapılan tüm harcamaların (elektrik, su, asansör, temizlik, bakım-onarım vb.) fatura veya geçerli yasal belgelere dayandığı, bu harcamaların site menfaatine ve piyasa koşullarına uygun olduğu,</li>
+          <li>Kasa ve banka mevcudunun, muhasebe kayıtları ile tam bir mutabakat içinde olduğu ve an itibarıyla <strong>{totalKasa.toLocaleString('tr-TR')} TL</strong> net kasa/banka bakiyesi bulunduğu tespit edilmiştir.</li>
+        </ul>
+        <p className="indent-8">Ayrıca Yönetim Kurulunun, aidatlarını süresinde ödemeyen maliklere karşı Kat Mülkiyeti Kanunu'nun (KMK) 20. maddesi uyarınca aylık %5 gecikme tazminatı işletme ve takip yükümlülüğünü yerine getirdiği görülmüştür.</p>
+        <p className="indent-8 font-medium">Netice itibarıyla; görevini layıkıyla, şeffaf ve başarılı bir şekilde yerine getiren Yönetim Kurulunun hesap ve işlemlerinin usulüne tamamen uygun olduğu anlaşıldığından, Yönetim Kurulunun <strong>İBRA EDİLMESİNİ</strong> Genel Kurulun yüksek takdirlerine saygıyla arz ve teklif ederiz.</p>
+        
+        <div className="mt-16 pt-8 flex justify-between px-8 text-center">
+          <div><p className="font-bold mb-8">Denetçi</p><p className="border-t border-slate-400 pt-2 w-48 mx-auto">(İmza)</p></div>
+          <div><p className="font-bold mb-8">Denetçi</p><p className="border-t border-slate-400 pt-2 w-48 mx-auto">(İmza)</p></div>
+          <div><p className="font-bold mb-8">Denetçi</p><p className="border-t border-slate-400 pt-2 w-48 mx-auto">(İmza)</p></div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ==========================================
+// 9. GENEL KURUL VE BÜTÇE
+// ==========================================
+function AdminAssembly({ units, computations, transactions, settings }) {
+  return (
+    <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
+      <div className="text-center py-12">
+        <BookOpen size={48} className="mx-auto text-blue-300 mb-4" />
+        <h2 className="text-2xl font-bold text-slate-800 mb-2">Genel Kurul & Bütçe Modülü</h2>
+        <p className="text-slate-500">Bu modül üzerinden önümüzdeki dönemin bütçesini planlayabilir ve genel kurul kararlarını arşivleyebilirsiniz.</p>
+      </div>
+    </div>
+  );
+}
+
+// ==========================================
 // 3. SAKİN (KULLANICI) PANELİ
 // ==========================================
 function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransaction, onLogout }) {
@@ -2116,509 +2144,98 @@ function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransactio
                   <span>Aidat: <strong className="ml-1">{dueBalance.toLocaleString('tr-TR')} TL</strong></span>
                   <span>Faiz: <strong className="ml-1">{penaltyBalance.toLocaleString('tr-TR')} TL</strong></span>
                   {fixtureBalance > 0 && <span>Demirbaş: <strong className="ml-1">{fixtureBalance.toLocaleString('tr-TR')} TL</strong></span>}
-                  {extraBalance > 0 && <span>Ekstra: <strong className="ml-1">{extraBalance.toLocaleString('tr-TR')} TL</strong></span>}
-                  {customBalance > 0 && <span>Özel: <strong className="ml-1">{customBalance.toLocaleString('tr-TR')} TL</strong></span>}
                 </div>
               )}
               {balance > 0 && (
-                <button onClick={handleSimulatePayment} className="bg-white text-red-600 font-bold py-3 px-8 rounded-full shadow-lg hover:bg-slate-50 transition-transform active:scale-95">Hemen Öde (Sanal)</button>
+                <button onClick={handleSimulatePayment} className="bg-white text-red-600 px-8 py-3 rounded-full font-bold hover:bg-red-50 transition-colors shadow-lg flex items-center mx-auto"><Wallet size={20} className="mr-2"/> Kart ile Öde (Simülasyon)</button>
               )}
             </div>
 
-            <div className="bg-blue-50 border border-blue-200 rounded-xl p-5 no-print">
-              <h4 className="font-bold flex items-center mb-2 text-blue-900"><Info size={18} className="mr-2" /> Gecikme Tazminatı (Faiz) Hesaplama Yöntemi</h4>
-              <p className="mb-2 text-sm text-blue-800"><strong>634 Sayılı KMK Madde 20</strong> uyarınca, aidat ve ortak gider borçlarını zamanında ödemeyen bağımsız bölüm sakinlerine, ödemede geciktikleri her ay için <strong>aylık %5</strong> oranında gecikme tazminatı uygulanır.</p>
-              <ul className="list-disc pl-5 space-y-1 text-sm text-blue-800">
-                <li>Faiz, her ay dönümünde yalnızca ödenmemiş <strong>ana para (aidat, demirbaş vb.)</strong> üzerinden hesaplanır. Faize tekrar faiz (bileşik faiz) işletilmez.</li>
-                <li>Borçlar Kanunu Madde 84 gereğince; yaptığınız kısmi ödemeler öncelikle birikmiş gecikme faizi borcunuzdan düşülür. Kalan tutar en eski ana para borcunuza sayılır.</li>
-                <li>Sistemimiz bu yasal kuralları otonom olarak şeffaf bir şekilde uygular.</li>
-              </ul>
-            </div>
-
-            <div className="bg-white rounded-xl shadow-sm border border-slate-100" id="resident-history-print">
-              <div className="print-only mb-6 text-center border-b-2 border-slate-800 pb-4 mt-4">
-                <h2 className="text-2xl font-bold uppercase">Yükseller Apartmanı - {unitName} Ekstresi</h2>
-                <p className="text-slate-600">Mevcut Bakiye: {balance > 0 ? `${balance.toLocaleString('tr-TR')} TL Borçlu` : 'Borcu Yok'} | Tarih Aralığı: {historyStartDate ? new Date(historyStartDate).toLocaleDateString('tr-TR') : 'Başlangıç'} - {historyEndDate ? new Date(historyEndDate).toLocaleDateString('tr-TR') : 'Bugün'}</p>
+            <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden" id="resident-history-print">
+              <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50 no-print">
+                <h3 className="text-lg font-bold text-slate-800 flex items-center"><History className="mr-2 text-slate-500"/> Hesap Hareketlerim</h3>
+                <button onClick={() => handlePrint('resident-history-print')} className="text-slate-500 hover:text-slate-800 flex items-center text-sm font-medium"><Printer size={16} className="mr-1"/> Yazdır / PDF</button>
               </div>
 
-              <div className="px-6 py-4 border-b border-slate-100 flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 bg-slate-50 no-print">
-                <h3 className="font-semibold text-slate-800 flex items-center whitespace-nowrap"><FileText className="text-slate-400 mr-2" size={20} /> Hesap Hareketlerim</h3>
-                <div className="flex flex-wrap gap-2 w-full xl:w-auto items-center">
-                   <div className="flex items-center gap-1 bg-white border border-slate-300 rounded-lg px-2 py-1 flex-1 sm:flex-none">
-                    <input type="date" className="text-sm outline-none font-medium bg-transparent w-full sm:w-auto" value={historyStartDate} onChange={e => setHistoryStartDate(e.target.value)} title="Başlangıç Tarihi" />
+              <div className="print-only mb-6 text-center border-b-2 border-slate-800 pb-4 mt-4 px-6">
+                <h2 className="text-2xl font-bold uppercase">Yükseller Apartmanı - {unitName} Hesap Ekstresi</h2>
+                <p className="text-slate-600">Sayın {residentName} | Tarih: {new Date().toLocaleDateString('tr-TR')}</p>
+              </div>
+
+              <div className="p-4 bg-white border-b border-slate-100 flex flex-wrap gap-2 no-print">
+                 <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 flex-1 sm:flex-none">
+                    <input type="date" className="text-sm outline-none font-medium bg-transparent w-full sm:w-auto" value={historyStartDate} onChange={e => setHistoryStartDate(e.target.value)} title="Başlangıç" />
                     <span className="text-slate-400 font-bold">-</span>
-                    <input type="date" className="text-sm outline-none font-medium bg-transparent w-full sm:w-auto" value={historyEndDate} onChange={e => setHistoryEndDate(e.target.value)} title="Bitiş Tarihi" />
-                   </div>
-                   <div className="relative flex-1 min-w-[150px]">
+                    <input type="date" className="text-sm outline-none font-medium bg-transparent w-full sm:w-auto" value={historyEndDate} onChange={e => setHistoryEndDate(e.target.value)} title="Bitiş" />
+                 </div>
+                 <div className="relative flex-1 min-w-[150px]">
                     <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input type="text" placeholder="İşlem ara..." className="w-full pl-9 pr-3 py-1.5 border border-slate-300 rounded-lg text-sm bg-white" value={historySearch} onChange={e => setHistorySearch(e.target.value)} />
-                   </div>
-                   <button onClick={() => handlePrint('resident-history-print')} className="bg-slate-800 text-white px-3 py-1.5 rounded-lg flex items-center hover:bg-slate-900 text-sm font-medium w-full sm:w-auto justify-center"><Printer size={16}/></button>
-                </div>
+                    <input type="text" placeholder="Açıklama ara..." className="w-full pl-9 px-3 py-1.5 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500" value={historySearch} onChange={e => setHistorySearch(e.target.value)} />
+                 </div>
               </div>
+
               <div className="divide-y divide-slate-100">
-                {myTransactions.length === 0 ? <div className="p-6 text-center text-slate-500">Kayıt bulunamadı.</div> : myTransactions.map(t => (
-                  <div key={t.id} className="p-4 sm:px-6 flex justify-between items-center">
-                    <div>
-                      <p className="font-medium text-slate-800 flex items-center">{t.type === 'penalty' && <Percent size={14} className="mr-1 text-red-500"/>}{t.description}</p>
-                      <p className="text-sm text-slate-500">{new Date(t.date).toLocaleDateString('tr-TR')} {t.type === 'fixture' && ' • Demirbaş'}{t.type === 'extra' && ' • Ekstra'}{t.type === 'custom' && ' • Özel'}</p>
+                {myTransactions.map(t => (
+                  <div key={t.id} className="p-4 flex justify-between items-center hover:bg-slate-50 transition-colors">
+                    <div className="flex items-center space-x-3">
+                      <div className={`p-2 rounded-lg hidden sm:block ${t.type === 'payment' ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'}`}>
+                        {t.type === 'payment' ? <TrendingDown size={20}/> : <TrendingUp size={20}/>}
+                      </div>
+                      <div>
+                        <p className="font-bold text-slate-800">{t.description}</p>
+                        <p className="text-xs text-slate-500 font-medium">{new Date(t.date).toLocaleDateString('tr-TR')} • {getTypeBadge(t.type)}</p>
+                      </div>
                     </div>
-                    <div className={`font-bold ${t.type === 'payment' ? 'text-emerald-600' : 'text-red-600'}`}>{t.type === 'payment' ? 'Ödendi' : (t.type === 'penalty' ? 'Faiz' : 'Borç')} : {t.amount} TL</div>
+                    <div className={`font-bold text-lg whitespace-nowrap ${t.type === 'payment' ? 'text-emerald-600' : 'text-red-600'}`}>
+                      {t.type === 'payment' ? '+' : '-'}{t.amount.toLocaleString('tr-TR')} TL
+                    </div>
                   </div>
                 ))}
-              </div>
-              <div className="p-4 border-t border-slate-200 bg-slate-50 text-[11px] text-slate-500 text-justify">
-                <strong>Yasal Bilgilendirme (KMK Md. 20 ve BK Md. 84):</strong> Zamanında ödenmeyen aidat ve ortak gider borçlarına aylık %5 gecikme tazminatı (faiz) uygulanmaktadır. Sistemimiz otonom olarak her ay dönümünde, sadece ödenmemiş "ana para" üzerinden hesaplama yapar (faize faiz işletilmez). Yapılan kısmi ödemeler yasa gereği öncelikle birikmiş faiz borcundan düşülür, kalan tutar ana para borcuna mahsup edilir.
+                {myTransactions.length === 0 && <div className="p-8 text-center text-slate-500 font-medium">Kayıt bulunamadı.</div>}
               </div>
             </div>
           </div>
         )}
 
         {activeTab === 'expenses' && (
-          <div className="bg-white rounded-xl shadow-sm border border-slate-100" id="resident-expense-print">
-            <div className="print-only mb-6 text-center border-b-2 border-slate-800 pb-4 mt-4">
-              <h2 className="text-2xl font-bold uppercase">Yükseller Apartmanı - Bina Giderleri Raporu</h2>
+          <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden" id="resident-expenses-print">
+            <div className="p-6 border-b border-slate-100 bg-slate-50 flex justify-between items-center no-print">
+               <h3 className="text-lg font-bold text-slate-800 flex items-center"><ClipboardList className="mr-2 text-slate-500"/> Şeffaf Bina Giderleri</h3>
+               <button onClick={() => handlePrint('resident-expenses-print')} className="text-slate-500 hover:text-slate-800 flex items-center text-sm font-medium"><Printer size={16} className="mr-1"/> Yazdır</button>
+            </div>
+            
+            <div className="print-only mb-6 text-center border-b-2 border-slate-800 pb-4 mt-4 px-6">
+              <h2 className="text-2xl font-bold uppercase">Yükseller Apartmanı - Bina Giderleri Tablosu</h2>
               <p className="text-slate-600">Tarih: {new Date().toLocaleDateString('tr-TR')}</p>
             </div>
-            <div className="p-6 border-b border-slate-100 bg-slate-50 rounded-t-xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 no-print">
-              <div>
-                <h3 className="font-bold text-slate-800 text-lg">Bina Ortak Giderleri</h3>
-                <p className="text-slate-500 text-sm mt-1">Yönetim tarafından sitemiz için yapılan tüm harcamalar.</p>
-              </div>
-              <div className="flex gap-2 w-full sm:w-auto">
-                 <div className="relative flex-1">
+
+            <div className="p-4 bg-white border-b border-slate-100 no-print">
+               <div className="relative">
                   <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                  <input type="text" placeholder="Gider ara..." className="w-full pl-9 pr-3 py-1.5 border border-slate-300 rounded-lg text-sm bg-white" value={expenseSearch} onChange={e => setExpenseSearch(e.target.value)} />
-                 </div>
-                 <button onClick={() => handlePrint('resident-expense-print')} className="bg-slate-800 text-white px-3 py-1.5 rounded-lg flex items-center hover:bg-slate-900 text-sm font-medium"><Printer size={16}/></button>
-              </div>
+                  <input type="text" placeholder="Giderlerde ara (Örn: Asansör, Elektrik)..." className="w-full pl-9 px-3 py-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500" value={expenseSearch} onChange={e => setExpenseSearch(e.target.value)} />
+               </div>
             </div>
+
             <div className="divide-y divide-slate-100">
-              {expenses.length === 0 ? <div className="p-6 text-center text-slate-500">Kayıt bulunamadı.</div> : expenses.map(t => (
-                <div key={t.id} className="p-4 sm:px-6 flex justify-between items-center hover:bg-slate-50">
-                  <div className="flex items-center space-x-3">
-                    <CheckCircle className="text-blue-400 hidden sm:block" size={20} />
-                    <div><p className="font-medium text-slate-800">{t.description}</p><p className="text-sm text-slate-500">{new Date(t.date).toLocaleDateString('tr-TR')} • <span className="font-medium">{t.category}</span></p></div>
+              {expenses.map(t => (
+                <div key={t.id} className="p-4 flex justify-between items-center hover:bg-slate-50">
+                  <div>
+                    <p className="font-bold text-slate-800">{t.description}</p>
+                    <p className="text-xs text-slate-500 font-medium">{new Date(t.date).toLocaleDateString('tr-TR')} • <span className="text-slate-700">{t.category}</span></p>
                   </div>
-                  <div className="font-semibold text-slate-700 bg-slate-100 px-3 py-1 rounded-lg">{t.amount} TL</div>
+                  <div className="font-bold text-slate-800">{t.amount.toLocaleString('tr-TR')} TL</div>
                 </div>
               ))}
+              {expenses.length === 0 && <div className="p-8 text-center text-slate-500 font-medium">Gider kaydı bulunamadı.</div>}
             </div>
           </div>
         )}
+
         <footer className="mt-12 mb-8 text-center no-print">
-  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
-    Powered by Ukurtcu ©
-  </p>
-</footer>
-      </div>
-    </div>
-  );
-}
-
-function AdminReport({ computations, transactions }) { 
-  const { totalKasa, totalGider, totalBekleyenAidat, totalBekleyenDemirbas, totalBekleyenEkstra, totalBekleyenOzel, totalBekleyenFaiz } = computations;
-  const expenses = transactions.filter(t => t.type === 'expense');
-  const payments = transactions.filter(t => t.type === 'payment');
-  const totalTahsilat = payments.reduce((acc, t) => acc + t.amount, 0);
-  const expensesByCategory = expenses.reduce((acc, curr) => { const cat = curr.category || 'Diğer'; acc[cat] = (acc[cat] || 0) + curr.amount; return acc; }, {});
-
-  return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center no-print">
-        <h2 className="text-xl font-bold text-slate-800">Denetim Kurulu Mali Raporu</h2>
-        <button onClick={() => handlePrint('printable-report')} className="bg-slate-800 hover:bg-slate-900 text-white px-4 py-2 rounded-lg flex items-center shadow-sm transition-colors">
-          <Printer size={18} className="mr-2" /> Raporu Yazdır / PDF Al
-        </button>
-      </div>
-
-      <div className="bg-white p-8 rounded-xl shadow-sm border border-slate-200" id="printable-report">
-        <div className="text-center mb-8 border-b-2 border-slate-800 pb-6">
-          <h1 className="text-2xl font-bold text-slate-900 uppercase tracking-wide">Yükseller Apartmanı Yönetimi</h1>
-          <h2 className="text-lg text-slate-600 mt-1">Denetim Kurulu Mali Dönem Raporu</h2>
-          <p className="text-sm text-slate-500 mt-2">Rapor Tarihi: {new Date().toLocaleDateString('tr-TR')} {new Date().toLocaleTimeString('tr-TR')}</p>
-        </div>
-
-        <div className="mb-8">
-          <h3 className="font-bold text-lg text-slate-800 mb-4 border-b border-slate-200 pb-2">1. Genel Finansal Durum Özet Tablosu</h3>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="bg-slate-50 p-4 rounded-lg border border-slate-100">
-              <p className="text-sm text-slate-500 mb-1">Dönem İçi Toplam Tahsilat</p><p className="text-xl font-bold text-emerald-600">{totalTahsilat.toLocaleString('tr-TR')} TL</p>
-            </div>
-            <div className="bg-slate-50 p-4 rounded-lg border border-slate-100">
-              <p className="text-sm text-slate-500 mb-1">Dönem İçi Toplam Giderler</p><p className="text-xl font-bold text-red-600">-{totalGider.toLocaleString('tr-TR')} TL</p>
-            </div>
-            <div className="bg-slate-800 p-4 rounded-lg border border-slate-700 col-span-2 text-center">
-              <p className="text-sm text-slate-300 mb-1">Mevcut Kasa / Banka Bakiyesi</p><p className="text-3xl font-bold text-white">{totalKasa.toLocaleString('tr-TR')} TL</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="mb-8">
-          <h3 className="font-bold text-lg text-slate-800 mb-4 border-b border-slate-200 pb-2">2. Bekleyen Alacaklar (Tahsil Edilemeyenler)</h3>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            <div className="bg-amber-50 p-4 rounded-lg border border-amber-100"><p className="text-sm text-amber-700 mb-1">Bekleyen Aidat</p><p className="text-xl font-bold text-amber-800">{totalBekleyenAidat.toLocaleString('tr-TR')} TL</p></div>
-            <div className="bg-blue-50 p-4 rounded-lg border border-blue-100"><p className="text-sm text-blue-700 mb-1">Bekleyen Demirbaş</p><p className="text-xl font-bold text-blue-800">{totalBekleyenDemirbas.toLocaleString('tr-TR')} TL</p></div>
-            <div className="bg-purple-50 p-4 rounded-lg border border-purple-100"><p className="text-sm text-purple-700 mb-1">Bekleyen Ekstra</p><p className="text-xl font-bold text-purple-800">{totalBekleyenEkstra.toLocaleString('tr-TR')} TL</p></div>
-            <div className="bg-teal-50 p-4 rounded-lg border border-teal-100"><p className="text-sm text-teal-700 mb-1">Bekleyen Özel</p><p className="text-xl font-bold text-teal-800">{totalBekleyenOzel.toLocaleString('tr-TR')} TL</p></div>
-            <div className="bg-orange-50 p-4 rounded-lg border border-orange-100"><p className="text-sm text-orange-700 mb-1">Bekleyen Faiz</p><p className="text-xl font-bold text-orange-800">{totalBekleyenFaiz.toLocaleString('tr-TR')} TL</p></div>
-          </div>
-        </div>
-
-        <div className="mb-8">
-          <h3 className="font-bold text-lg text-slate-800 mb-4 border-b border-slate-200 pb-2">3. Giderlerin Kategorik Dağılımı</h3>
-          {Object.keys(expensesByCategory).length === 0 ? <p className="text-slate-500 text-sm">Herhangi bir gider kaydı bulunmamaktadır.</p> : (
-            <table className="w-full text-left border-collapse border border-slate-200">
-              <thead><tr className="bg-slate-100 text-slate-700"><th className="p-3 border border-slate-200 font-medium">Gider Kalemi</th><th className="p-3 border border-slate-200 font-medium text-right">Toplam Tutar</th></tr></thead>
-              <tbody>
-                {Object.entries(expensesByCategory).sort((a,b) => b[1]-a[1]).map(([cat, total]) => (
-                  <tr key={cat} className="border-b border-slate-200"><td className="p-3 border-r border-slate-200">{cat}</td><td className="p-3 text-right font-medium">{total.toLocaleString('tr-TR')} TL</td></tr>
-                ))}
-                <tr className="bg-slate-50 font-bold text-slate-800"><td className="p-3 border-r border-slate-200 text-right">GENEL TOPLAM GİDER:</td><td className="p-3 text-right text-red-600">{totalGider.toLocaleString('tr-TR')} TL</td></tr>
-              </tbody>
-            </table>
-          )}
-        </div>
-        <div className="mt-16 pt-8 grid grid-cols-2 gap-8 text-center">
-          <div><p className="font-bold text-slate-800 mb-12">Yönetim Kurulu</p><p className="border-t border-slate-400 pt-2 inline-block w-48">İmza</p></div>
-          <div><p className="font-bold text-slate-800 mb-12">Denetim Kurulu</p><p className="border-t border-slate-400 pt-2 inline-block w-48">İmza</p></div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function AdminAssembly({ units, computations, transactions, settings }) { 
-  const [docType, setDocType] = useState('butce'); 
-  const [meetingType, setMeetingType] = useState('olagan'); 
-  const [meetingDate, setMeetingDate] = useState('');
-  const [meetingTime, setMeetingTime] = useState('14:00');
-  const [meetingPlace, setMeetingPlace] = useState('Site Toplantı Salonu');
-  const [extraAgenda, setExtraAgenda] = useState('Acil onarım konularının görüşülmesi');
-
-  const [inflationRate, setInflationRate] = useState(settings.defaultInflationRate); 
-  const [budgetItems, setBudgetItems] = useState([]);
-
-  const { totalKasa, totalGider } = computations;
-  const totalTahsilat = transactions.filter(t => t.type === 'payment').reduce((acc, t) => acc + t.amount, 0);
-
-  const handleGenerateBudget = () => {
-    const expenses = transactions.filter(t => t.type === 'expense');
-    
-    let dataMonths = 1;
-    if (expenses.length > 0) {
-      const dates = expenses.map(e => new Date(e.date).getTime());
-      dataMonths = Math.max(1, Math.ceil((Math.max(...dates) - Math.min(...dates)) / (1000 * 60 * 60 * 24 * 30)));
-    }
-    
-    const aggregated = {};
-    expenses.forEach(t => { aggregated[t.category] = (aggregated[t.category] || 0) + t.amount; });
-
-    const newItems = EXPENSE_CATEGORIES.map(cat => {
-      const monthlyAvg = (aggregated[cat] || 0) / dataMonths;
-      let projectedMonthly = monthlyAvg * (1 + (Number(inflationRate) / 100));
-      let months = 12;
-      let defaultNote = '';
-      
-      if (cat === 'Maaş/SGK') {
-        const tahminiBrut = Number(settings.grossMinimumWage) || 0;
-        const isverenSgkPayi = tahminiBrut * (settings.sgkEmployerRate / 100);
-        const issizlikSigortasi = tahminiBrut * (settings.unemploymentRate / 100);
-        
-        projectedMonthly = tahminiBrut + isverenSgkPayi + issizlikSigortasi;
-        defaultNote = `Asgari Brüt: ${tahminiBrut}₺, İşveren SGK+İşsizlik: ${(isverenSgkPayi + issizlikSigortasi).toFixed(0)}₺`;
-      } else if (cat === 'Kıdem Tazminatı Fonu') {
-        const tahminiBrut = Number(settings.grossMinimumWage) || 0;
-        projectedMonthly = tahminiBrut / 12;
-        defaultNote = `Aylık Kıdem Tazminatı Karşılığı (Brüt Asgari Ücret / 12)`;
-      } else if (projectedMonthly === 0) {
-         if (cat === 'Elektrik') projectedMonthly = 2500;
-         else if (cat === 'Su') projectedMonthly = 800;
-         else if (cat === 'Asansör') projectedMonthly = 2000;
-         else if (cat === 'Temizlik') projectedMonthly = 1500;
-         else projectedMonthly = 1000;
-         
-         defaultNote = 'Geçmiş veri bulunmadığı için piyasa tahmini üzerinden eklendi.';
-      } else {
-         if (cat === 'Elektrik' || cat === 'Su') defaultNote = `Aylık ortalama harcama (${monthlyAvg.toFixed(0)} TL) üzerinden tahmini %${inflationRate} artış uygulanmıştır.`;
-         else defaultNote = `Geçmiş harcama ortalaması üzerinden enflasyon yansıtıldı.`;
-      }
-
-      return { id: cat, category: cat, monthlyAmount: Math.round(projectedMonthly), months: months, amount: Math.round(projectedMonthly * months), notes: defaultNote };
-    });
-    setBudgetItems(newItems);
-  };
-
-  useEffect(() => {
-    if (docType === 'butce' && budgetItems.length === 0) {
-      handleGenerateBudget();
-    }
-  }, [docType]);
-
-  const handleBudgetChange = (id, field, value) => {
-    setBudgetItems(prev => prev.map(item => {
-      if (item.id !== id) return item;
-      const updatedItem = { ...item, [field]: value };
-      
-      if (field === 'monthlyAmount' || field === 'months') {
-        updatedItem.amount = Number(updatedItem.monthlyAmount) * Number(updatedItem.months);
-      } 
-      else if (field === 'amount') {
-        updatedItem.monthlyAmount = Math.round(Number(value) / Number(updatedItem.months));
-      }
-      
-      return updatedItem;
-    }));
-  };
-
-  const totalAnnualBudget = budgetItems.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  const totalMonthlyBudget = totalAnnualBudget / 12;
-  
-  const personelAnnual = budgetItems.filter(i => i.category.includes('Maaş') || i.category.includes('Personel') || i.category.includes('Kıdem')).reduce((sum, i) => sum + Number(i.amount || 0), 0);
-  const otherAnnual = totalAnnualBudget - personelAnnual;
-
-  const personelMonthly = personelAnnual / 12;
-  const otherMonthly = otherAnnual / 12;
-
-  const totalUnitsCount = units.length; 
-  const totalArsaPayi = 5741; 
-
-  const calculateAidat = (arsaPayi) => {
-    const esitPay = personelMonthly / totalUnitsCount; 
-    const arsaPayiOranliPay = otherMonthly * (arsaPayi / totalArsaPayi); 
-    return Math.ceil(esitPay + arsaPayiOranliPay);
-  };
-
-  return (
-    <div className="space-y-6">
-      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 no-print">
-        <h2 className="text-xl font-bold text-slate-800 mb-4 flex items-center"><BookOpen className="mr-2 text-blue-600" /> Genel Kurul & Bütçe Evrakları</h2>
-        
-        <div className="mb-4 flex flex-wrap gap-6 bg-blue-50 p-4 rounded-lg border border-blue-100">
-          <span className="font-semibold text-blue-800">Toplantı Türü:</span>
-          <label className="flex items-center cursor-pointer text-blue-900"><input type="radio" name="meetingType" value="olagan" checked={meetingType === 'olagan'} onChange={(e) => setMeetingType(e.target.value)} className="mr-2" /> Olağan Genel Kurul</label>
-          <label className="flex items-center cursor-pointer text-blue-900"><input type="radio" name="meetingType" value="olaganustu" checked={meetingType === 'olaganustu'} onChange={(e) => { setMeetingType(e.target.value); if (docType === 'yonetim' || docType === 'denetim') setDocType('cagri'); }} className="mr-2" /> Olağanüstü Genel Kurul</label>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 bg-slate-50 p-4 rounded-lg border border-slate-200">
-          <div><label className="block text-sm font-medium text-slate-700 mb-1">Toplantı Tarihi</label><input type="date" className="w-full border border-slate-300 rounded-lg px-3 py-2" value={meetingDate} onChange={e => setMeetingDate(e.target.value)} /></div>
-          <div><label className="block text-sm font-medium text-slate-700 mb-1">Toplantı Saati</label><input type="time" className="w-full border border-slate-300 rounded-lg px-3 py-2" value={meetingTime} onChange={e => setMeetingTime(e.target.value)} /></div>
-          <div><label className="block text-sm font-medium text-slate-700 mb-1">Toplantı Yeri</label><input type="text" placeholder="Örn: Sığınak, Toplantı Salonu" className="w-full border border-slate-300 rounded-lg px-3 py-2" value={meetingPlace} onChange={e => setMeetingPlace(e.target.value)} /></div>
-          {meetingType === 'olaganustu' && ( <div className="md:col-span-3 pt-2 border-t border-slate-200 mt-2"><label className="block text-sm font-medium text-slate-700 mb-1">Olağanüstü Gündem Konusu (Acil Durum)</label><input type="text" placeholder="Örn: Asansör revizyonu ve ek bütçe talebi" className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white" value={extraAgenda} onChange={e => setExtraAgenda(e.target.value)} /></div> )}
-        </div>
-
-        <div className="flex flex-wrap justify-between items-center gap-4">
-          <div className="flex flex-wrap gap-2">
-            <button onClick={() => setDocType('butce')} className={`px-4 py-2 rounded-lg font-medium transition-colors ${docType === 'butce' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>İşletme Projesi (Bütçe)</button>
-            <button onClick={() => setDocType('cagri')} className={`px-4 py-2 rounded-lg font-medium transition-colors ${docType === 'cagri' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Çağrı Dilekçesi</button>
-            <button onClick={() => setDocType('hazirun')} className={`px-4 py-2 rounded-lg font-medium transition-colors ${docType === 'hazirun' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Hazirun Listesi</button>
-            {meetingType === 'olagan' && (
-              <><button onClick={() => setDocType('yonetim')} className={`px-4 py-2 rounded-lg font-medium transition-colors ${docType === 'yonetim' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Yönetim Raporu</button><button onClick={() => setDocType('denetim')} className={`px-4 py-2 rounded-lg font-medium transition-colors ${docType === 'denetim' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Denetim Raporu</button></>
-            )}
-          </div>
-          <button onClick={() => handlePrint('printable-assembly-doc')} className="bg-slate-800 hover:bg-slate-900 text-white px-6 py-2 rounded-lg flex items-center shadow-sm transition-colors font-medium"><Printer size={18} className="mr-2" /> Belgeyi Yazdır</button>
-        </div>
-      </div>
-
-      {docType === 'butce' && (
-        <div className="bg-emerald-50 p-6 rounded-xl border border-emerald-100 no-print animate-in fade-in">
-          <div className="flex flex-col lg:flex-row justify-between lg:items-center mb-6 gap-4">
-            <div>
-              <h3 className="font-bold text-lg text-emerald-800 flex items-center"><Calculator className="mr-2" size={20}/> Akıllı Bütçe Planlayıcı</h3>
-              <p className="text-sm text-emerald-700 mt-1">Geçmiş verilerinizi ve "Sistem Ayarları"ndaki parametreleri kullanarak otomatik taslak oluşturur.</p>
-            </div>
-            <div className="flex gap-2">
-              <div className="bg-white px-3 py-1.5 rounded-lg border border-emerald-200 flex items-center">
-                <span className="text-sm text-emerald-700 font-medium mr-2">Enflasyon/Artış:</span>
-                <input type="number" className="w-16 border-none outline-none text-emerald-800 font-bold bg-transparent text-right" value={inflationRate} onChange={e => setInflationRate(e.target.value)} />
-                <span className="text-emerald-800 font-bold ml-1">%</span>
-              </div>
-              <button onClick={handleGenerateBudget} className="bg-emerald-600 text-white px-4 py-2 rounded-lg font-medium shadow-sm hover:bg-emerald-700 transition">Hesapla / Yenile</button>
-            </div>
-          </div>
-          
-          <div className="bg-white rounded-lg border border-emerald-200 overflow-hidden shadow-sm">
-            <table className="w-full text-left">
-              <thead className="bg-emerald-100/50 text-emerald-800 text-sm">
-                <tr>
-                  <th className="p-3 w-1/5">Gider Kalemi</th>
-                  <th className="p-3 w-1/6">Aylık Tutar (TL)</th>
-                  <th className="p-3 w-1/12 text-center">Ay</th>
-                  <th className="p-3 w-1/6">Yıllık Tutar (TL)</th>
-                  <th className="p-3">Dayanak / Açıklama</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-emerald-50">
-                {budgetItems.map(item => (
-                  <tr key={item.id} className="hover:bg-emerald-50/50 transition-colors">
-                    <td className="p-3 font-medium text-slate-700">{item.category}</td>
-                    <td className="p-3"><input type="number" className="w-full border border-slate-300 rounded px-3 py-1.5 focus:border-emerald-500 outline-none font-medium text-slate-800" value={item.monthlyAmount} onChange={e => handleBudgetChange(item.id, 'monthlyAmount', e.target.value)} /></td>
-                    <td className="p-3"><input type="number" className="w-full border border-slate-300 rounded px-2 py-1.5 focus:border-emerald-500 outline-none font-medium text-slate-800 text-center" value={item.months} onChange={e => handleBudgetChange(item.id, 'months', e.target.value)} /></td>
-                    <td className="p-3"><input type="number" className="w-full border border-slate-300 rounded px-3 py-1.5 focus:border-emerald-500 outline-none font-bold text-emerald-700" value={item.amount} onChange={e => handleBudgetChange(item.id, 'amount', e.target.value)} /></td>
-                    <td className="p-3"><input type="text" className="w-full border border-slate-300 rounded px-3 py-1.5 focus:border-emerald-500 outline-none text-sm text-slate-600" value={item.notes} onChange={e => handleBudgetChange(item.id, 'notes', e.target.value)} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* YAZDIRILACAK RESMİ EVRAKLAR */}
-      <div className="bg-white p-10 rounded-xl shadow-sm border border-slate-200" id="printable-assembly-doc">
-        
-        {docType === 'butce' && (
-          <div className="text-slate-900 leading-relaxed text-justify">
-             <h1 className="text-xl font-bold text-center mb-8 uppercase tracking-wide border-b-2 border-black pb-4">Yükseller Apartmanı Yeni Dönem<br/>Tahmini İşletme Projesi (Bütçe)</h1>
-             <p className="mb-6 text-right"><strong>Hazırlanma Tarihi:</strong> {new Date().toLocaleDateString('tr-TR')}</p>
-             <p className="mb-4"><strong>Sayın Kat Malikleri;</strong></p>
-             <p className="mb-6 indent-8">Kat mülkiyeti kanunu gereği, apartmanımızın önümüzdeki döneme ait tahmini gelir ve giderlerini belirlemek, hizmetlerin aksamadan yürütülmesini sağlamak amacıyla Yönetim Kurulumuzca hazırlanan İşletme Projesi aşağıda sunulmuştur. Bütçe hesaplamalarında geçmiş dönem gerçek verileri, asgari ücret öngörüleri ve güncel piyasa/enflasyon koşulları dikkate alınmıştır.</p>
-             
-             <h3 className="font-bold text-lg mb-3 underline">1. Tahmini Gider Tablosu</h3>
-             <table className="w-full text-left border-collapse border border-black mb-2 text-sm">
-                <thead><tr className="bg-slate-100">
-                  <th className="p-2 border border-black w-1/3">Gider Kalemi</th>
-                  <th className="p-2 border border-black w-1/3 text-center">Hesaplama (Aylık x Ay)</th>
-                  <th className="p-2 border border-black w-1/3 text-right">Yıllık Ödenek (TL)</th>
-                </tr></thead>
-                <tbody>
-                  {budgetItems.map(item => {
-                    const isEqualShare = item.category.includes('Maaş') || item.category.includes('Personel') || item.category.includes('Kıdem');
-                    return (
-                      <tr key={item.id} className={isEqualShare ? "bg-indigo-50/60" : "bg-emerald-50/60"}>
-                        <td className="p-2 border border-black font-medium">
-                          <div className="flex items-center justify-between">
-                            <span>{item.category}</span>
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${isEqualShare ? 'bg-indigo-100 border-indigo-200 text-indigo-800' : 'bg-emerald-100 border-emerald-200 text-emerald-800'}`}>
-                              {isEqualShare ? 'Eşit' : 'Arsa Payı'}
-                            </span>
-                          </div>
-                        </td>
-                        <td className="p-2 border border-black text-center text-slate-700 font-mono text-xs">{Number(item.monthlyAmount).toLocaleString('tr-TR')} TL x {item.months} Ay</td>
-                        <td className="p-2 border border-black text-right font-bold">{Number(item.amount).toLocaleString('tr-TR')} TL</td>
-                      </tr>
-                    );
-                  })}
-                  <tr className="bg-slate-200">
-                    <td colSpan="2" className="p-2 border border-black font-bold text-right">TOPLAM YILLIK GİDER:</td>
-                    <td className="p-2 border border-black font-bold text-right text-lg">{totalAnnualBudget.toLocaleString('tr-TR')} TL</td>
-                  </tr>
-                </tbody>
-             </table>
-             <div className="flex flex-wrap gap-4 mb-8 text-xs">
-                <div className="flex items-center"><span className="w-3 h-3 bg-indigo-100 border border-indigo-200 inline-block mr-1"></span> Eşit Dağıtılacak Giderler (KMK Md. 20/a)</div>
-                <div className="flex items-center"><span className="w-3 h-3 bg-emerald-100 border border-emerald-200 inline-block mr-1"></span> Arsa Payına Göre Dağıtılacak Giderler (KMK Md. 20/b)</div>
-             </div>
-
-             <h3 className="font-bold text-lg mb-3 underline">2. Gelir (Aidat) Dağılımı ve Tahsilat Planı (KMK Madde 20)</h3>
-             <p className="mb-4 text-sm indent-8">634 Sayılı Kat Mülkiyeti Kanunu Madde 20 gereğince; personel (Maaş/SGK vb.) giderleri bağımsız bölüm sayısına <strong>eşit</strong>, diğer tüm bakım, işletme ve onarım giderleri ise <strong>arsa payı oranına</strong> göre dağıtılmıştır.</p>
-
-             <div className="bg-slate-50 p-6 border border-black rounded-lg mb-8">
-                <div className="flex justify-between border-b border-slate-300 pb-2 mb-2">
-                  <span className="font-medium text-slate-600">Aylık Toplam Personel Gideri (Eşit Dağıtılacak):</span>
-                  <span className="font-bold">{personelMonthly.toLocaleString('tr-TR', { maximumFractionDigits: 2 })} TL</span>
-                </div>
-                <div className="flex justify-between border-b border-slate-300 pb-2 mb-2">
-                  <span className="font-medium text-slate-600">Aylık Toplam Diğer Giderler (Arsa Payına Göre Dağıtılacak):</span>
-                  <span className="font-bold">{otherMonthly.toLocaleString('tr-TR', { maximumFractionDigits: 2 })} TL</span>
-                </div>
-                
-                <table className="w-full mt-6 text-sm border-collapse border border-slate-300 bg-white">
-                  <thead className="bg-slate-200 text-slate-800">
-                    <tr><th className="p-2 border border-slate-300 text-left">Birim Tipi / Numarası</th><th className="p-2 border border-slate-300 text-center">Arsa Payı</th><th className="p-2 border border-slate-300 text-right">Önerilen Yeni Aylık Aidat</th></tr>
-                  </thead>
-                  <tbody>
-                    <tr><td className="p-2 border border-slate-300">Konutlar (Daire 1-44 Arası Tümü)</td><td className="p-2 border border-slate-300 text-center text-slate-500">110 / 5741</td><td className="p-2 border border-slate-300 text-right font-bold text-slate-800">{calculateAidat(110).toLocaleString('tr-TR')} TL</td></tr>
-                    <tr><td className="p-2 border border-slate-300">Dükkan 45, 46</td><td className="p-2 border border-slate-300 text-center text-slate-500">140 / 5741</td><td className="p-2 border border-slate-300 text-right font-bold text-slate-800">{calculateAidat(140).toLocaleString('tr-TR')} TL</td></tr>
-                    <tr><td className="p-2 border border-slate-300">Dükkan 47, 48, 49</td><td className="p-2 border border-slate-300 text-center text-slate-500">70 / 5741</td><td className="p-2 border border-slate-300 text-right font-bold text-slate-800">{calculateAidat(70).toLocaleString('tr-TR')} TL</td></tr>
-                    <tr><td className="p-2 border border-slate-300">Dükkan 50</td><td className="p-2 border border-slate-300 text-center text-slate-500">90 / 5741</td><td className="p-2 border border-slate-300 text-right font-bold text-slate-800">{calculateAidat(90).toLocaleString('tr-TR')} TL</td></tr>
-                    <tr><td className="p-2 border border-slate-300">Dükkan 51</td><td className="p-2 border border-slate-300 text-center text-slate-500">321 / 5741</td><td className="p-2 border border-slate-300 text-right font-bold text-red-600">{calculateAidat(321).toLocaleString('tr-TR')} TL</td></tr>
-                  </tbody>
-                </table>
-             </div>
-             
-             <p className="mb-12 indent-8 text-sm italic">* İşbu işletme projesi kat malikleri kurulunda görüşülerek karara bağlanacak olup, onaylanması halinde tebliğ hükmünde sayılacaktır. Ortaya çıkabilecek olağanüstü ve mecburi tamiratlar (çatı, tesisat vs.) için ayrıca ek bütçe kararı alınabilecektir.</p>
-             <div className="text-right"><p className="font-bold mb-8">Yükseller Apartmanı Yönetim Kurulu</p><p className="border-t border-black pt-2 inline-block w-48 text-center">İmza</p></div>
-          </div>
-        )}
-
-        {docType === 'cagri' && (
-          <div className="text-slate-900 leading-relaxed">
-            <h1 className="text-xl font-bold text-center mb-8 uppercase tracking-wide border-b-2 border-black pb-4">Yükseller Apartmanı Kat Malikleri Kurulu<br/>{meetingType === 'olagan' ? 'Olağan' : 'Olağanüstü'} Genel Kurul Toplantı Çağrısı</h1>
-            <p className="mb-4 text-right"><strong>Tarih:</strong> {new Date().toLocaleDateString('tr-TR')}</p>
-            <p className="mb-6"><strong>Sayın Kat Maliki;</strong></p>
-            <p className="mb-4 indent-8 text-justify">{meetingType === 'olagan' ? 'Yükseller Apartmanı Kat Malikleri Kurulu, yıllık olağan toplantısını yapmak, geçmiş dönemi değerlendirmek ve yeni dönem bütçesi ile yönetimini belirlemek üzere aşağıda belirtilen gündem maddelerini görüşmek için toplanacaktır.' : 'Yükseller Apartmanı Kat Malikleri Kurulu, apartmanımızı ilgilendiren önemli ve acil konuları görüşmek ve karara bağlamak üzere aşağıda belirtilen gündem maddeleriyle olağanüstü toplanacaktır.'}</p>
-            <p className="mb-4 indent-8 text-justify">Toplantı <strong>{meetingDate ? new Date(meetingDate).toLocaleDateString('tr-TR') : '.../.../202..'}</strong> tarihinde, saat <strong>{meetingTime}</strong>'da <strong>{meetingPlace}</strong> adresinde yapılacaktır. Bu toplantıda yeterli çoğunluk sağlanamadığı takdirde, ikinci toplantı bir hafta sonra aynı yer ve saatte çoğunluk aranmaksızın yapılacaktır.</p>
-            <p className="mb-8 indent-8 text-justify">Kat Mülkiyeti Kanunu uyarınca alınacak kararlar tüm kat maliklerini bağlayacağından, toplantıya katılmanızı veya kendinizi bir vekille temsil ettirmenizi önemle rica ederiz.</p>
-            
-            <h2 className="font-bold text-lg mb-3 underline">GÜNDEM MADDELERİ:</h2>
-            {meetingType === 'olagan' ? (
-              <ol className="list-decimal pl-6 space-y-2 mb-12">
-                <li>Açılış, yoklama ve toplantı yeter sayısının tespiti.</li><li>Saygı duruşu ve Divan Heyeti'nin seçilmesi.</li><li>Divan Heyeti'ne toplantı tutanaklarını imzalama yetkisi verilmesi.</li><li>Geçmiş dönem Yönetim Kurulu Faaliyet Raporunun ve Denetim Kurulu Raporunun okunması.</li><li>Yönetim ve Denetim Kurullarının ayrı ayrı ibrası (aklanması).</li><li>Yeni dönem İşletme Projesi'nin görüşülmesi ve karara bağlanması.</li><li>Yeni dönem Yönetim ve Denetim Kurulu asil ve yedek üyelerinin seçimi.</li><li>Dilek, temenniler ve kapanış.</li>
-              </ol>
-            ) : (
-              <ol className="list-decimal pl-6 space-y-2 mb-12">
-                <li>Açılış, yoklama ve toplantı yeter sayısının tespiti.</li><li>Saygı duruşu ve Divan Heyeti'nin seçilmesi.</li><li>Divan Heyeti'ne toplantı tutanaklarını imzalama yetkisi verilmesi.</li><li><strong>{extraAgenda || '........................................................................'}</strong> konusunun görüşülerek karara bağlanması.</li><li>Dilek, temenniler ve kapanış.</li>
-              </ol>
-            )}
-            <div className="text-right mt-12"><p className="font-bold mb-8">Yükseller Apartmanı Yönetim Kurulu</p><p className="border-t border-black pt-2 inline-block w-48 text-center">İmza</p></div>
-          </div>
-        )}
-
-        {docType === 'hazirun' && (
-          <div className="text-slate-900">
-            <h1 className="text-lg font-bold text-center mb-6 uppercase tracking-wide border-b-2 border-black pb-2">Yükseller Apartmanı {meetingType === 'olagan' ? 'Olağan' : 'Olağanüstü'} Genel Kurul Hazirun Cetveli</h1>
-            <div className="flex justify-between text-sm mb-4 font-medium"><p><strong>Toplantı Tarihi:</strong> {meetingDate ? new Date(meetingDate).toLocaleDateString('tr-TR') : '...............'}</p><p><strong>Toplantı Yeri:</strong> {meetingPlace}</p></div>
-            <table className="w-full text-left border-collapse border border-black text-sm">
-              <thead><tr className="bg-slate-100"><th className="p-2 border border-black w-12 text-center">No</th><th className="p-2 border border-black w-32">Birim Adı</th><th className="p-2 border border-black">Malik Adı Soyadı</th><th className="p-2 border border-black w-32 text-center">Asaleten / Vekaleten</th><th className="p-2 border border-black w-32 text-center">İmza</th></tr></thead>
-              <tbody>
-                {units.map((unit, index) => ( <tr key={unit.id}><td className="p-2 border border-black text-center">{index + 1}</td><td className="p-2 border border-black font-medium">{unit.name}</td><td className="p-2 border border-black">{unit.ownerName || '....................................'}</td><td className="p-2 border border-black"></td><td className="p-2 border border-black h-10"></td></tr> ))}
-              </tbody>
-            </table>
-            <div className="mt-8 flex justify-between px-10">
-              <div className="text-center"><p className="font-bold mb-8">Divan Başkanı</p><p className="border-t border-black pt-2 w-32">İmza</p></div>
-              <div className="text-center"><p className="font-bold mb-8">Yazman</p><p className="border-t border-black pt-2 w-32">İmza</p></div>
-            </div>
-          </div>
-        )}
-
-        {docType === 'yonetim' && (
-          <div className="text-slate-900 leading-relaxed text-justify">
-            <h1 className="text-xl font-bold text-center mb-8 uppercase tracking-wide border-b-2 border-black pb-4">Yönetim Kurulu Faaliyet Raporu</h1>
-            <p className="mb-6 text-right"><strong>Tarih:</strong> {new Date().toLocaleDateString('tr-TR')}</p>
-            <p className="mb-4"><strong>Sayın Divan, Değerli Kat Malikleri;</strong></p>
-            <p className="mb-4 indent-8">Görevde bulunduğumuz hizmet dönemi içerisinde, sitemizin huzuru, güvenliği ve değerinin korunması amacıyla Kat Mülkiyeti Kanunu ve Yönetim Planı çerçevesinde çalışmalarımız titizlikle yürütülmüştür.</p>
-            <p className="mb-4 indent-8">Dönem içerisinde asansör bakımları periyodik olarak yaptırılmış, ortak alan temizlik ve aydınlatma giderleri zamanında karşılanmış, binamızın acil onarım gerektiren fiziki ihtiyaçlarına hızla müdahale edilmiştir. Finansal şeffaflık ilkesi gereği, gelir ve gider tablomuz aşağıda özetlenmiştir:</p>
-            <div className="my-8 flex justify-center">
-              <table className="w-3/4 text-left border-collapse border border-black">
-                <tbody>
-                  <tr><td className="p-3 border border-black font-semibold bg-slate-100">Dönem İçi Toplam Gelir (Tahsilat):</td><td className="p-3 border border-black text-right">{totalTahsilat.toLocaleString('tr-TR')} TL</td></tr>
-                  <tr><td className="p-3 border border-black font-semibold bg-slate-100">Dönem İçi Toplam Gider (Harcamalar):</td><td className="p-3 border border-black text-right">-{totalGider.toLocaleString('tr-TR')} TL</td></tr>
-                  <tr><td className="p-3 border border-black font-bold bg-slate-200">Kasa / Banka Devir Bakiyesi:</td><td className="p-3 border border-black text-right font-bold">{totalKasa.toLocaleString('tr-TR')} TL</td></tr>
-                </tbody>
-              </table>
-            </div>
-            <p className="mb-4 indent-8">Sitemizin ortak yaşama dair kurallarına riayet eden ve aidat ödemelerini düzenli yaparak yönetime destek olan tüm komşularımıza teşekkür ederiz. Bekleyen aidat ve faiz alacaklarının hukuki takibi yeni döneme devredilmiştir.</p>
-            <p className="mb-12 indent-8">Görev dönemimize ait hesap ve faaliyetlerimizi takdirlerinize sunar, Yönetim Kurulumuzun ibra edilmesini (aklanmasını) saygılarımızla arz ederiz.</p>
-            <div className="text-right"><p className="font-bold mb-8">Yönetim Kurulu Başkanı</p><p className="border-t border-black pt-2 inline-block w-48 text-center">İmza</p></div>
-          </div>
-        )}
-
-        {docType === 'denetim' && (
-          <div className="text-slate-900 leading-relaxed text-justify">
-            <h1 className="text-xl font-bold text-center mb-8 uppercase tracking-wide border-b-2 border-black pb-4">Denetim Kurulu Raporu</h1>
-            <p className="mb-6 text-right"><strong>Tarih:</strong> {new Date().toLocaleDateString('tr-TR')}</p>
-            <p className="mb-4"><strong>Yükseller Apartmanı Kat Malikleri Genel Kurul Başkanlığı'na;</strong></p>
-            <p className="mb-4 indent-8">Apartmanımız Yönetim Kurulu'nun, geçmiş çalışma dönemine ait hesapları, karar defteri, işletme defteri ile gelir-gider makbuzları ve faturaları kurulumuzca detaylı bir şekilde incelenmiştir.</p>
-            <p className="mb-4 indent-8">Yapılan denetimler sonucunda;</p>
-            <ul className="list-disc pl-10 mb-4 space-y-2">
-              <li>Karar defterinin usulüne uygun tutulduğu, kararların imza altına alındığı,</li><li>Gelirlerin makbuz veya banka dekontları karşılığında tahsil edildiği ve kayıtlara doğru geçirildiği,</li><li>Giderlerin tamamının fatura veya geçerli yasal belgelere dayandığı, harcamaların site menfaatine uygun olduğu,</li><li>Kasa ve banka kayıtları ile defter kayıtlarının birbirini tam olarak tuttuğu ({totalKasa.toLocaleString('tr-TR')} TL nakit mevcudu bulunduğu) tespit edilmiştir.</li>
-            </ul>
-            <p className="mb-4 indent-8">Yönetim Kurulunun, tahsil edilemeyen borçlara ilişkin Kat Mülkiyeti Kanunu Madde 20 uyarınca aylık %5 gecikme tazminatı işletme yükümlülüğünü yerine getirdiği görülmüştür.</p>
-            <p className="mb-12 indent-8">Netice olarak; dürüst, şeffaf ve başarılı bir yönetim sergileyen Yönetim Kurulunun hesap ve işlemlerinin usulüne uygun olduğu anlaşıldığından, Yönetim Kurulunun <strong>İBRA EDİLMESİNİ</strong> Genel Kurulun yüksek takdirlerine saygıyla arz ve teklif ederiz.</p>
-            <div className="text-right"><p className="font-bold mb-8">Denetim Kurulu Üyesi / Denetçi</p><p className="border-t border-black pt-2 inline-block w-48 text-center">İmza</p></div>
-          </div>
-        )}
+          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
+            Powered by UKURTCU
+          </p>
+        </footer>
       </div>
     </div>
   );
