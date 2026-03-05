@@ -371,9 +371,20 @@ export default function App() {
     const newReminders = runAutoReminders(transactions, units);
     
     if (newPenalties.length > 0 || newReminders.length > 0) {
-      dispatch({ type: 'ADD_AUTO_TRANSACTIONS', payload: [...newPenalties, ...newReminders] });
+      const autoTxs = [...newPenalties, ...newReminders];
+      
+      // Otomatik işlemleri Firebase'e gönder
+      const batch = writeBatch(db);
+      autoTxs.forEach(tx => {
+        const docRef = doc(collection(db, "transactions"));
+        batch.set(docRef, { ...tx, addedBy: 'Sistem' });
+      });
+      batch.commit().catch(e => console.error("Otomatik loglar kaydedilemedi", e));
+
+      dispatch({ type: 'ADD_AUTO_TRANSACTIONS', payload: autoTxs });
       
       let msgs = [];
+
       const penaltyCount = newPenalties.filter(t => t.type === 'penalty').length;
       if (penaltyCount > 0) msgs.push(`Geçmiş aylara ait ${penaltyCount} adet gecikme faizi yansıtıldı.`);
       if (newReminders.length > 0) msgs.push(`Borçlu maliklere son gün ödeme hatırlatması gönderildi.`);
@@ -397,9 +408,56 @@ export default function App() {
       dispatch({ type: 'ADD_TRANSACTION', payload: { transaction: newTx, user: getUserName() }});
     } catch (e) { console.error("Buluta kaydederken hata oluştu: ", e); }
   };
-  const addBulkTransactions = (txsArray) => dispatch({ type: 'ADD_BULK_TRANSACTIONS', payload: { transactions: txsArray, user: getUserName() }});
-  const addBulkDue = (type, daireAmount, dukkanAmounts, description) => dispatch({ type: 'ADD_BULK_DUE', payload: { type, daireAmount, dukkanAmounts, description, user: getUserName() }});
-  
+  const addBulkTransactions = async (txsArray) => {
+    try {
+      const batch = writeBatch(db);
+      const groupId = `import-${Date.now()}`;
+      
+      txsArray.forEach((tx, i) => {
+        const docRef = doc(collection(db, "transactions"));
+        batch.set(docRef, {
+          ...tx, 
+          groupId, 
+          date: tx.date || new Date().toISOString(), 
+          addedBy: getUserName()
+        });
+      });
+      
+      await batch.commit();
+      dispatch({ type: 'ADD_BULK_TRANSACTIONS', payload: { transactions: txsArray, user: getUserName() }});
+    } catch (e) { 
+      console.error("Toplu tahsilat kaydedilemedi: ", e); 
+    }
+  };
+
+  const addBulkDue = async (type, daireAmount, dukkanAmounts, description) => {
+    try {
+      const batch = writeBatch(db);
+      const groupId = `bulk-${Date.now()}`;
+
+      units.forEach((unit, index) => {
+        const amount = unit.type === 'daire' ? Number(daireAmount) : Number(dukkanAmounts[unit.id] || 0);
+        if (amount > 0) {
+          const docRef = doc(collection(db, "transactions"));
+          batch.set(docRef, {
+            date: new Date().toISOString(), 
+            type, 
+            amount, 
+            unitId: unit.id, 
+            description, 
+            groupId,
+            addedBy: getUserName()
+          });
+        }
+      });
+
+      await batch.commit();
+      dispatch({ type: 'ADD_BULK_DUE', payload: { type, daireAmount, dukkanAmounts, description, user: getUserName() }});
+    } catch (e) { 
+      console.error("Toplu borçlandırma kaydedilemedi: ", e); 
+    }
+  };
+
   // BİRİMLERİ BULUTA KAYDET
   const onUpdateUnit = async (updatedUnit) => {
     try {
