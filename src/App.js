@@ -56,41 +56,29 @@ const appReducer = (state, action) => {
       const typeName = transaction.type === 'due' ? 'Borçlandırma' : transaction.type === 'payment' ? 'Tahsilat' : 'Gider';
       return {
         ...state,
-        transactions: [{ id: Date.now() + Math.random(), ...transaction, date: transaction.date || new Date().toISOString() }, ...state.transactions],
         sysLogs: [createLog('EKLEME', `Yeni ${typeName} işlendi. Tutar: ${transaction.amount} TL. Açıklama: ${transaction.description}`, user), ...state.sysLogs]
       };
     }
     case 'ADD_BULK_TRANSACTIONS': {
       const { transactions, user } = action.payload;
-      const groupId = `import-${Date.now()}`;
-      const newTxs = transactions.map((tx, i) => ({ id: Date.now() + Math.random() + i, ...tx, groupId, date: tx.date || new Date().toISOString() }));
       return {
         ...state,
-        transactions: [...newTxs, ...state.transactions],
         sysLogs: [createLog('TOPLU YÜKLEME', `${transactions.length} adet işlem Excel/Banka yoluyla toplu eklendi.`, user), ...state.sysLogs]
       };
     }
     case 'ADD_BULK_DUE': {
-      const { type, daireAmount, dukkanAmounts, description, user } = action.payload;
-      const groupId = `bulk-${Date.now()}`;
-      const newTransactions = state.units.map((unit, index) => {
-        const amount = unit.type === 'daire' ? Number(daireAmount) : Number(dukkanAmounts[unit.id] || 0);
-        return { id: Date.now() + index, date: new Date().toISOString(), type, amount, unitId: unit.id, description, groupId };
-      });
+      const { type, description, user } = action.payload;
       return {
         ...state,
-        transactions: [...newTransactions, ...state.transactions],
         sysLogs: [createLog('TOPLU BORÇLANDIRMA', `Tüm birimlere ${type} tipinde toplu borç yansıtıldı. Açıklama: ${description}`, user), ...state.sysLogs]
       };
     }
     case 'DELETE_TRANSACTION': {
-      const { id, user } = action.payload;
-      const tx = state.transactions.find(t => t.id === id);
+      const { tx, user } = action.payload;
       if (!tx) return state;
       const typeName = tx.type === 'due' ? 'Borçlandırma' : tx.type === 'payment' ? 'Tahsilat' : 'Gider';
       return {
         ...state,
-        transactions: state.transactions.filter(t => t.id !== id),
         sysLogs: [createLog('SİLME', `${typeName} kaydı tamamen silindi. Tutar: ${tx.amount} TL. Açıklama: ${tx.description}`, user), ...state.sysLogs]
       };
     }
@@ -98,15 +86,13 @@ const appReducer = (state, action) => {
       const { groupId, user } = action.payload;
       return {
         ...state,
-        transactions: state.transactions.filter(t => t.groupId !== groupId),
         sysLogs: [createLog('SİLME (TOPLU)', `Bir işlem grubu (grup ID: ${groupId}) ve içerdiği tüm kayıtlar silindi.`, user), ...state.sysLogs]
       };
     }
     case 'EDIT_TRANSACTION': {
-      const { id, updatedData, user } = action.payload;
+      const { user } = action.payload;
       return {
         ...state,
-        transactions: state.transactions.map(t => t.id === id ? { ...t, ...updatedData } : t),
         sysLogs: [createLog('DÜZENLEME', `Bir işlemin detayları (Tutar/Tarih vb.) güncellendi.`, user), ...state.sysLogs]
       };
     }
@@ -135,7 +121,7 @@ const appReducer = (state, action) => {
         sysLogs: [createLog('AYAR GÜNCELLEME', `Sistem bütçe ve maaş parametreleri güncellendi.`, user), ...state.sysLogs]
       };
     }
-    case 'ADD_AUTO_TRANSACTIONS': return { ...state, transactions: [...state.transactions, ...action.payload] };
+    case 'ADD_AUTO_TRANSACTIONS': return state; 
     default: return state;
   }
 };
@@ -373,7 +359,6 @@ export default function App() {
     if (newPenalties.length > 0 || newReminders.length > 0) {
       const autoTxs = [...newPenalties, ...newReminders];
       
-      // Otomatik işlemleri Firebase'e gönder
       const batch = writeBatch(db);
       autoTxs.forEach(tx => {
         const docRef = doc(collection(db, "transactions"));
@@ -384,7 +369,6 @@ export default function App() {
       dispatch({ type: 'ADD_AUTO_TRANSACTIONS', payload: autoTxs });
       
       let msgs = [];
-
       const penaltyCount = newPenalties.filter(t => t.type === 'penalty').length;
       if (penaltyCount > 0) msgs.push(`Geçmiş aylara ait ${penaltyCount} adet gecikme faizi yansıtıldı.`);
       if (newReminders.length > 0) msgs.push(`Borçlu maliklere son gün ödeme hatırlatması gönderildi.`);
@@ -401,19 +385,22 @@ export default function App() {
 
   const addTransaction = async (transaction) => {
     try {
-      const docRef = await addDoc(collection(db, "transactions"), {
+      await addDoc(collection(db, "transactions"), {
         ...transaction, date: transaction.date || new Date().toISOString(), addedBy: getUserName()
       });
-      const newTx = { ...transaction, id: docRef.id };
-      dispatch({ type: 'ADD_TRANSACTION', payload: { transaction: newTx, user: getUserName() }});
-    } catch (e) { console.error("Buluta kaydederken hata oluştu: ", e); }
+      dispatch({ type: 'ADD_TRANSACTION', payload: { transaction, user: getUserName() }});
+    } catch (e) { 
+      console.error("Buluta kaydederken hata oluştu: ", e); 
+      alert("HATA: İşlem Firebase'e kaydedilemedi! Lütfen Firebase 'Rules' sekmesinden okuma/yazma izinlerinizi güncelleyin.");
+    }
   };
+
   const addBulkTransactions = async (txsArray) => {
     try {
       const batch = writeBatch(db);
       const groupId = `import-${Date.now()}`;
       
-      txsArray.forEach((tx, i) => {
+      txsArray.forEach((tx) => {
         const docRef = doc(collection(db, "transactions"));
         batch.set(docRef, {
           ...tx, 
@@ -427,6 +414,7 @@ export default function App() {
       dispatch({ type: 'ADD_BULK_TRANSACTIONS', payload: { transactions: txsArray, user: getUserName() }});
     } catch (e) { 
       console.error("Toplu tahsilat kaydedilemedi: ", e); 
+      alert("HATA: Toplu işlem Firebase'e kaydedilemedi! Lütfen Firebase izinlerinizi kontrol edin.");
     }
   };
 
@@ -435,7 +423,7 @@ export default function App() {
       const batch = writeBatch(db);
       const groupId = `bulk-${Date.now()}`;
 
-      units.forEach((unit, index) => {
+      units.forEach((unit) => {
         const amount = unit.type === 'daire' ? Number(daireAmount) : Number(dukkanAmounts[unit.id] || 0);
         if (amount > 0) {
           const docRef = doc(collection(db, "transactions"));
@@ -452,12 +440,13 @@ export default function App() {
       });
 
       await batch.commit();
-      dispatch({ type: 'ADD_BULK_DUE', payload: { type, daireAmount, dukkanAmounts, description, user: getUserName() }});
+      dispatch({ type: 'ADD_BULK_DUE', payload: { type, description, user: getUserName() }});
     } catch (e) { 
       console.error("Toplu borçlandırma kaydedilemedi: ", e); 
+      alert("HATA: Toplu borçlandırma Firebase'e kaydedilemedi! Lütfen Firebase izinlerinizi kontrol edin.");
     }
   };
-
+  
   // BİRİMLERİ BULUTA KAYDET
   const onUpdateUnit = async (updatedUnit) => {
     try {
@@ -493,7 +482,10 @@ export default function App() {
     try {
       await updateDoc(doc(db, "transactions", id), updatedData);
       dispatch({ type: 'EDIT_TRANSACTION', payload: { id, updatedData, user: getUserName() }});
-    } catch (e) { console.error("Bulutta güncellenirken hata:", e); }
+    } catch (e) { 
+      console.error("Bulutta güncellenirken hata:", e); 
+      alert("HATA: Güncelleme Firebase'e kaydedilemedi! Firebase izinlerini kontrol edin.");
+    }
   };
 
   // AYARLARI BULUTA KAYDET
@@ -527,16 +519,21 @@ export default function App() {
           snapshot.forEach(async (docItem) => {
             await deleteDoc(doc(db, "transactions", docItem.id));
           });
+          dispatch({ type: 'DELETE_TRANSACTION_GROUP', payload: { groupId: deleteDialog.id, user: getUserName() }});
         } else if (Array.isArray(deleteDialog.id)) {
           for (const tId of deleteDialog.id) {
             await deleteDoc(doc(db, "transactions", tId));
           }
+          dispatch({ type: 'DELETE_TRANSACTION_GROUP', payload: { groupId: 'multiple', user: getUserName() }});
         } else {
+          const tx = transactions.find(t => t.id === deleteDialog.id);
           await deleteDoc(doc(db, "transactions", deleteDialog.id));
+          if(tx) dispatch({ type: 'DELETE_TRANSACTION', payload: { tx, user: getUserName() }});
         }
         setDeleteDialog({ isOpen: false, id: null, isGroup: false });
       } catch (error) {
         console.error("Buluttan silerken hata:", error);
+        alert("HATA: Silme işlemi Firebase'e yansıtılamadı! Firebase izinlerini kontrol edin.");
       }
     } else setPasswordError("Hatalı şifre! Lütfen tekrar deneyin.");
   };
