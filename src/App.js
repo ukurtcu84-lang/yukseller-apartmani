@@ -19,6 +19,7 @@ import AdminUnits from './components/AdminUnits';
 import AdminHistoryTabs from './components/AdminHistoryTabs';
 import AdminReport from './components/AdminReport';
 import { getTypeBadge } from './components/utils';
+import AdminAssembly from './components/AdminAssembly';
 
 const firebaseConfig = {
   apiKey: "AIzaSyDdzNfCoIg_AKWZyRST7XsLnik18O6UjOE",
@@ -629,137 +630,6 @@ function NavButton({ active, onClick, icon, text }) {
     </button>
   );
 }
-
-function AdminAssembly({ units, computations, transactions, settings }) {
-  const [docType, setDocType] = useState('butce'); 
-  const [meetingType, setMeetingType] = useState('olagan'); 
-  const [meetingDate, setMeetingDate] = useState('');
-  const [meetingTime, setMeetingTime] = useState('14:00');
-  const [meetingPlace, setMeetingPlace] = useState('Site Toplantı Salonu');
-  const [extraAgenda, setExtraAgenda] = useState('Acil onarım konularının görüşülmesi');
-
-  const [inflationRate, setInflationRate] = useState(settings.defaultInflationRate); 
-  const [budgetItems, setBudgetItems] = useState([]);
-
-  const { totalKasa, totalGider } = computations;
-  const totalTahsilat = transactions.filter(t => t.type === 'payment').reduce((acc, t) => acc + t.amount, 0);
-
-  const handleGenerateBudget = () => {
-    const expenses = transactions.filter(t => t.type === 'expense');
-    
-    let dataMonths = 1;
-    if (expenses.length > 0) {
-      const dates = expenses.map(e => new Date(e.date).getTime());
-      dataMonths = Math.max(1, Math.ceil((Math.max(...dates) - Math.min(...dates)) / (1000 * 60 * 60 * 24 * 30)));
-    }
-    
-    const aggregated = {};
-    expenses.forEach(t => { aggregated[t.category] = (aggregated[t.category] || 0) + t.amount; });
-
-    const newItems = EXPENSE_CATEGORIES.map(cat => {
-      const monthlyAvg = (aggregated[cat] || 0) / dataMonths;
-      let projectedMonthly = monthlyAvg * (1 + (Number(inflationRate) / 100));
-      let months = 12;
-      let defaultNote = '';
-      
-      if (cat === 'Maaş/SGK') {
-        const tahminiBrut = Number(settings.grossMinimumWage) || 0;
-        const isverenSgkPayi = tahminiBrut * (settings.sgkEmployerRate / 100);
-        const issizlikSigortasi = tahminiBrut * (settings.unemploymentRate / 100);
-        
-        projectedMonthly = tahminiBrut + isverenSgkPayi + issizlikSigortasi;
-        defaultNote = `Asgari Brüt: ${tahminiBrut}₺, İşveren SGK+İşsizlik: ${(isverenSgkPayi + issizlikSigortasi).toFixed(0)}₺`;
-      } else if (cat === 'Kıdem Tazminatı Fonu') {
-        const tahminiBrut = Number(settings.grossMinimumWage) || 0;
-        projectedMonthly = tahminiBrut / 12;
-        defaultNote = `Aylık Kıdem Tazminatı Karşılığı (Brüt Asgari Ücret / 12)`;
-      } else if (projectedMonthly === 0) {
-         if (cat === 'Elektrik') projectedMonthly = 2500;
-         else if (cat === 'Su') projectedMonthly = 800;
-         else if (cat === 'Asansör') projectedMonthly = 2000;
-         else if (cat === 'Temizlik') projectedMonthly = 1500;
-         else projectedMonthly = 1000;
-         
-         defaultNote = 'Geçmiş veri bulunmadığı için piyasa tahmini üzerinden eklendi.';
-      } else {
-         if (cat === 'Elektrik' || cat === 'Su') defaultNote = `Aylık ortalama harcama (${monthlyAvg.toFixed(0)} TL) üzerinden tahmini %${inflationRate} artış uygulanmıştır.`;
-         else defaultNote = `Geçmiş harcama ortalaması üzerinden enflasyon yansıtıldı.`;
-      }
-
-      return { id: cat, category: cat, monthlyAmount: Math.round(projectedMonthly), months: months, amount: Math.round(projectedMonthly * months), notes: defaultNote };
-    });
-    setBudgetItems(newItems);
-  };
-
-  useEffect(() => {
-    if (docType === 'butce' && budgetItems.length === 0) {
-      handleGenerateBudget();
-    }
-  }, [docType]);
-
-  const handleBudgetChange = (id, field, value) => {
-    setBudgetItems(prev => prev.map(item => {
-      if (item.id !== id) return item;
-      const updatedItem = { ...item, [field]: value };
-      
-      if (field === 'monthlyAmount' || field === 'months') {
-        updatedItem.amount = Number(updatedItem.monthlyAmount) * Number(updatedItem.months);
-      } 
-      else if (field === 'amount') {
-        updatedItem.monthlyAmount = Math.round(Number(value) / Number(updatedItem.months));
-      }
-      
-      return updatedItem;
-    }));
-  };
-
-  const totalAnnualBudget = budgetItems.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  const totalMonthlyBudget = totalAnnualBudget / 12;
-  
-  const personelAnnual = budgetItems.filter(i => i.category.includes('Maaş') || i.category.includes('Personel') || i.category.includes('Kıdem')).reduce((sum, i) => sum + Number(i.amount || 0), 0);
-  const otherAnnual = totalAnnualBudget - personelAnnual;
-
-  const personelMonthly = personelAnnual / 12;
-  const otherMonthly = otherAnnual / 12;
-
-  const totalUnitsCount = units.length; 
-  const totalArsaPayi = 5741; 
-
-  const calculateAidat = (arsaPayi) => {
-    const esitPay = personelMonthly / totalUnitsCount; 
-    const arsaPayiOranliPay = otherMonthly * (arsaPayi / totalArsaPayi); 
-    return Math.ceil(esitPay + arsaPayiOranliPay);
-  };
-
- const handlePrint = (elementId) => {
-  const el = document.getElementById(elementId);
-  if (!el) return;
-  const printWindow = window.open('', '_blank');
-  if (printWindow) {
-    printWindow.document.write(`
-      <html>
-        <head>
-          <title>Yazdır - Yükseller Apartmanı</title>
-          <script src="https://cdn.tailwindcss.com"></script>
-          <style>
-            @page { size: A4 portrait; margin: 12mm; }
-            @media print {
-              body { -webkit-print-color-adjust: exact; print-color-adjust: exact; font-size: 11pt; }
-              .no-print { display: none !important; }
-              .print-only { display: block !important; }
-              table { page-break-inside: auto; font-size: 10pt; width: 100%; min-width: auto !important; }
-              tr { page-break-inside: avoid; page-break-after: auto; }
-              thead { display: table-header-group; }
-              th, td { padding: 6px 8px !important; }
-            }
-          </style>
-        </head>
-        <body>${el.innerHTML}<script>setTimeout(() => {window.print(); window.close();}, 1000);</script></body>
-      </html>
-    `);
-    printWindow.document.close();
-  }
-};
 
   return (
     <div className="space-y-6">
