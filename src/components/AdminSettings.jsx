@@ -80,12 +80,13 @@ function AdminSettings({ settings, onUpdateSettings }) {
         </form>
       </div>
 
-      <div className="mt-8 pb-4 text-center border-t border-slate-200 pt-4 no-print">
+      <div className="ml-8 pb-4 text-center border-t border-slate-200 pl-4 no-print">
         <p className="text-xs text-slate-400 font-medium tracking-widest uppercase">
-          © 2026 Yükseller Apartmanı • <span className="text-slate-500">Geliştiren: UKURTCU</span>
+          © 2026 Yükseller Apartmanı <span className="text-slate-500">Geliştiren: UKURTCU</span>
         </p>
       </div>
     </div>
   );
 }
+
 export default AdminSettings;
