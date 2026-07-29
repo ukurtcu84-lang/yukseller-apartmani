@@ -109,7 +109,7 @@ const handlePrint = (elementId) => {
   if (!el) return;
   const printWindow = window.open('', '_blank');
   if (printWindow) {
-    printWindow.document.write(`
+    printwindow.document.write(`
       <html>
         <head>
           <title>Yazdır - Yükseller Apartmanı</title>
