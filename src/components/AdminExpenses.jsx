@@ -26,5 +26,6 @@ import React, { useState, useMemo } from 'react';
       showMessage("Gider başarıyla kaydedildi.");
     }
   };
-  export default AdminExpenses;
+
+export default AdminExpenses;
   
