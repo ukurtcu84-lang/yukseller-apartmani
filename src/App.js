@@ -578,7 +578,7 @@ function AdminDashboard({ units, transactions, sysLogs, computations, lastBilled
           </div>
         </div>
 
-        <div className="flex-1">
+        <main className="flex-1">
           {activeTab === 'overview' && <AdminOverview computations={computations} allTransactions={transactions} units={units} />}
           {activeTab === 'units' && <AdminUnits units={units} unitBalances={unitBalances} lastBilledMonth={lastBilledMonth} transactions={transactions} onAddTransaction={onAddTransaction} onAddBulkTransactions={onAddBulkTransactions} onAddBulkDue={onAddBulkDue} onDeleteTransaction={onDeleteTransaction} onEditTransaction={onEditTransaction} onUpdateUnit={onUpdateUnit} onUpdateBulkUnits={onUpdateBulkUnits} />}
           {activeTab === 'expenses' && <AdminExpenses transactions={transactions} onAddTransaction={onAddTransaction} onAddBulkTransactions={onAddBulkTransactions} />}
@@ -586,7 +586,7 @@ function AdminDashboard({ units, transactions, sysLogs, computations, lastBilled
           {activeTab === 'assembly' && <AdminAssembly units={units} computations={computations} transactions={transactions} settings={settings} />}
           {activeTab === 'history' && <AdminHistoryTabs transactions={transactions} sysLogs={sysLogs} onDeleteTransaction={onDeleteTransaction} onDeleteTransactionGroup={onDeleteTransactionGroup} onDeleteMultipleTransactions={onDeleteMultipleTransactions} />}
           {activeTab === 'settings' && <AdminSettings settings={settings} onUpdateSettings={onUpdateSettings} />}
-        </div>
+        </main>
       </div>
     </div>
   );
