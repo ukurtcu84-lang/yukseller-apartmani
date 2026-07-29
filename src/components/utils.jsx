@@ -13,4 +13,4 @@ export const getTypeBadge = (type) => {
     default: return <span className="bg-slate-100 text-slate-700 px-2 py-1 rounded text-xs font-bold whitespace-nowrap">{type}</span>;
   }
 };
-```eof
+

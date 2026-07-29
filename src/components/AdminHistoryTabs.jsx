@@ -226,4 +226,4 @@ export default function AdminHistoryTabs({ transactions, sysLogs, onDeleteTransa
     </div>
   );
 }
-```eof
+

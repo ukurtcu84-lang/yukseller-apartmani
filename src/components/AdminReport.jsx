@@ -67,4 +67,4 @@ export default function AdminReport({ computations, transactions }) {
     </div>
   );
 }
-```eof
+

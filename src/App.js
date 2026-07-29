@@ -109,7 +109,7 @@ const handlePrint = (elementId) => {
   if (!el) return;
   const printWindow = window.open('', '_blank');
   if (printWindow) {
-    printwindow.document.write(`
+    printWindow.document.write(`
       <html>
         <head>
           <title>Yazdır - Yükseller Apartmanı</title>
@@ -731,35 +731,35 @@ function AdminAssembly({ units, computations, transactions, settings }) {
     return Math.ceil(esitPay + arsaPayiOranliPay);
   };
 
-  const handlePrint = (elementId) => {
-    const el = document.getElementById(elementId);
-    if (!el) return;
-    const printWindow = window.open('', '_blank');
-    if (printWindow) {
-      printWindow.document.write(`
-        <html>
-          <head>
-            <title>Yazdır - Yükseller Apartmanı</title>
-            <script src="https://cdn.tailwindcss.com"></script>
-            <style>
-              @page { size: A4 portrait; margin: 12mm; }
-              @media print {
-                body { -webkit-print-color-adjust: exact; print-color-adjust: exact; font-size: 11pt; }
-                .no-print { display: none !important; }
-                .print-only { display: block !important; }
-                table { page-break-inside: auto; font-size: 10pt; width: 100%; min-width: auto !important; }
-                tr { page-break-inside: avoid; page-break-after: auto; }
-                thead { display: table-header-group; }
-                th, td { padding: 6px 8px !important; }
-              }
-            </style>
-          </head>
-          <body>${el.innerHTML}<script>setTimeout(() => {window.print(); window.close();}, 1000);</script></body>
-        </html>
-      `);
-      printWindow.document.close();
-    }
-  };
+ const handlePrint = (elementId) => {
+  const el = document.getElementById(elementId);
+  if (!el) return;
+  const printWindow = window.open('', '_blank');
+  if (printWindow) {
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Yazdır - Yükseller Apartmanı</title>
+          <script src="https://cdn.tailwindcss.com"></script>
+          <style>
+            @page { size: A4 portrait; margin: 12mm; }
+            @media print {
+              body { -webkit-print-color-adjust: exact; print-color-adjust: exact; font-size: 11pt; }
+              .no-print { display: none !important; }
+              .print-only { display: block !important; }
+              table { page-break-inside: auto; font-size: 10pt; width: 100%; min-width: auto !important; }
+              tr { page-break-inside: avoid; page-break-after: auto; }
+              thead { display: table-header-group; }
+              th, td { padding: 6px 8px !important; }
+            }
+          </style>
+        </head>
+        <body>${el.innerHTML}<script>setTimeout(() => {window.print(); window.close();}, 1000);</script></body>
+      </html>
+    `);
+    printWindow.document.close();
+  }
+};
 
   return (
     <div className="space-y-6">
@@ -1063,35 +1063,35 @@ function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransactio
     }
   }, [showUrgentReminder, balance, residentName]);
 
-  const handlePrint = (elementId) => {
-    const el = document.getElementById(elementId);
-    if (!el) return;
-    const printWindow = window.open('', '_blank');
-    if (printWindow) {
-      printWindow.document.write(`
-        <html>
-          <head>
-            <title>Yazdır - Yükseller Apartmanı</title>
-            <script src="https://cdn.tailwindcss.com"></script>
-            <style>
-              @page { size: A4 portrait; margin: 12mm; }
-              @media print {
-                body { -webkit-print-color-adjust: exact; print-color-adjust: exact; font-size: 11pt; }
-                .no-print { display: none !important; }
-                .print-only { display: block !important; }
-                table { page-break-inside: auto; font-size: 10pt; width: 100%; min-width: auto !important; }
-                tr { page-break-inside: avoid; page-break-after: auto; }
-                thead { display: table-header-group; }
-                th, td { padding: 6px 8px !important; }
-              }
-            </style>
-          </head>
-          <body>${el.innerHTML}<script>setTimeout(() => {window.print(); window.close();}, 1000);</script></body>
-        </html>
-      `);
-      printWindow.document.close();
-    }
-  };
+const handlePrint = (elementId) => {
+  const el = document.getElementById(elementId);
+  if (!el) return;
+  const printWindow = window.open('', '_blank');
+  if (printWindow) {
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Yazdır - Yükseller Apartmanı</title>
+          <script src="https://cdn.tailwindcss.com"></script>
+          <style>
+            @page { size: A4 portrait; margin: 12mm; }
+            @media print {
+              body { -webkit-print-color-adjust: exact; print-color-adjust: exact; font-size: 11pt; }
+              .no-print { display: none !important; }
+              .print-only { display: block !important; }
+              table { page-break-inside: auto; font-size: 10pt; width: 100%; min-width: auto !important; }
+              tr { page-break-inside: avoid; page-break-after: auto; }
+              thead { display: table-header-group; }
+              th, td { padding: 6px 8px !important; }
+            }
+          </style>
+        </head>
+        <body>${el.innerHTML}<script>setTimeout(() => {window.print(); window.close();}, 1000);</script></body>
+      </html>
+    `);
+    printWindow.document.close();
+  }
+};
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -1234,4 +1234,4 @@ function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransactio
     </div>
   );
 }
-```eof
+
