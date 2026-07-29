@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Home, Store, Users, Search, Printer, Filter, Plus, Upload, Phone, Edit, History, FileText, PlusCircle, Trash2, X, AlertCircle, CheckCircle, Lock } from 'lucide-react';
-import { getTypeBadge } from '../App';
+import { getTypeBadge } from './utils';
 
 export default function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddTransaction, onAddBulkTransactions, onAddBulkDue, onDeleteTransaction, onEditTransaction, onUpdateUnit, onUpdateBulkUnits }) {
   const [showBulkModal, setShowBulkModal] = useState(false);

@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { History, Printer, Search, Trash2, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react';
-import { getTypeBadge } from '../App';
+import { getTypeBadge } from './utils';
 
 export default function AdminHistoryTabs({ transactions, sysLogs, onDeleteTransaction, onDeleteTransactionGroup, onDeleteMultipleTransactions }) {
   const [activeTab, setActiveTab] = useState('txs'); 
