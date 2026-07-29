@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
-function AdminSettings({ settings, onUpdateSettings }) {
+import { Settings, User, TrendingUp, AlertCircle, CheckCircle } from 'lucide-react';
+
+export default function AdminSettings({ settings, onUpdateSettings }) {
   const [formData, setFormData] = useState(settings);
   const [sysMessage, setSysMessage] = useState(null);
 
@@ -23,7 +25,8 @@ function AdminSettings({ settings, onUpdateSettings }) {
     <div className="space-y-6">
       {sysMessage && (
         <div className={`p-4 rounded-lg flex items-center shadow-md mb-4 ${sysMessage.type === 'error' ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}>
-          {sysMessage.type === 'error' ? <AlertCircle className="mr-2" size={20} /> : <CheckCircle className="mr-2" size={20} />}<span className="font-medium">{sysMessage.text}</span>
+          {sysMessage.type === 'error' ? <AlertCircle className="mr-2" size={20} /> : <CheckCircle className="mr-2" size={20} />}
+          <span className="font-medium">{sysMessage.text}</span>
         </div>
       )}
 
@@ -88,5 +91,3 @@ function AdminSettings({ settings, onUpdateSettings }) {
     </div>
   );
 }
-
-export default AdminSettings;
