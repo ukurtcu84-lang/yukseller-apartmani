@@ -23,7 +23,6 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
-// --- MOCK DATA OLUŞTURUCULAR ---
 const generateUnits = () => {
   const units = [];
   for (let i = 1; i <= 44; i++) {
@@ -126,47 +125,29 @@ const appReducer = (state, action) => {
   }
 };
 
-// PDF / YAZDIRMA FONKSİYONU (Görselleri ve Renkleri Korur)
-const handleExportPDF = (elementId, fileName = 'Rapor') => {
+// PDF / YAZDIRMA FONKSİYONU (Pop-up engelleyiciye takılmaz, görselleri korur)
+const handlePrint = (elementId, fileName = 'Rapor') => {
   const el = document.getElementById(elementId);
-  if (!el) return;
-  
-  const printWindow = window.open('', '_blank');
-  if (printWindow) {
-    printWindow.document.write(`
-      <html>
-        <head>
-          <title>${fileName} - Yükseller Apartmanı</title>
-          <script src="https://cdn.tailwindcss.com"></script>
-          <style>
-            @page { size: A4 portrait; margin: 12mm; }
-            @media print {
-              /* Arka plan renklerinin ve gölgelerin PDF'te çıkmasını zorunlu kılar */
-              body { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; background: white; font-size: 10pt;}
-              .no-print { display: none !important; }
-              .print-only { display: block !important; }
-              table { page-break-inside: auto; width: 100%; border-collapse: collapse; }
-              tr { page-break-inside: avoid; page-break-after: auto; }
-              thead { display: table-header-group; }
-              th, td { padding: 8px !important; }
-              * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-            }
-          </style>
-        </head>
-        <body>
-          ${el.innerHTML}
-          <script>
-            // Tailwind CSS'in yüklenmesi ve stillerin uygulanması için kısa bir süre bekliyoruz
-            setTimeout(() => {
-              window.print();
-              window.close();
-            }, 1000);
-          </script>
-        </body>
-      </html>
-    `);
-    printWindow.document.close();
+  if (!el) {
+    alert("Yazdırılacak alan bulunamadı.");
+    return;
   }
+  
+  // Belge adını değiştiriyoruz ki PDF olarak indirirken dosya adı güzel görünsün
+  const originalTitle = document.title;
+  document.title = fileName;
+  
+  // Uygulamanın en üstündeki @media print CSS'in algılaması için hedef class'ı ekliyoruz
+  el.classList.add('print-target');
+  
+  // DOM'un güncellenmesi için çok kısa bir süre bekleyip yazdır komutunu tetikliyoruz
+  setTimeout(() => {
+    window.print();
+    
+    // Yazdırma diyaloğu kapandığında (veya iptal edildiğinde) sistemi eski haline getiriyoruz
+    el.classList.remove('print-target');
+    document.title = originalTitle;
+  }, 150);
 };
 
 const getBalances = (txs, units) => {
@@ -315,7 +296,6 @@ export default function App() {
 
   // --- BULUTTAN (FİREBASE) CANLI VERİ DİNLEME ---
   useEffect(() => {
-    // İşlemleri Canlı Dinle
     const unsubTxs = onSnapshot(collection(db, "transactions"), (snapshot) => {
       const fetchedTxs = [];
       snapshot.forEach((doc) => fetchedTxs.push({ id: doc.id, ...doc.data() }));
@@ -323,7 +303,6 @@ export default function App() {
       dispatch({ type: 'SET_TRANSACTIONS', payload: fetchedTxs });
     }, (error) => console.error("İşlemler dinlenemedi:", error));
 
-    // Birimleri (Kişileri) Canlı Dinle
     const unsubUnits = onSnapshot(collection(db, "units"), (snapshot) => {
       if (!snapshot.empty) {
         const fetchedUnits = [];
@@ -332,10 +311,8 @@ export default function App() {
       }
     }, (error) => {
       console.error("Kişiler dinlenemedi:", error);
-      alert("DİKKAT: Firebase İzinleri Açık Değil! Verileriniz kalıcı olarak kaydedilmeyecektir. Lütfen Firebase Rules kısmını güncelleyin.");
     });
 
-    // Ayarları Canlı Dinle
     const unsubSettings = onSnapshot(collection(db, "settings"), (snapshot) => {
       if (!snapshot.empty) {
         let fetchedSettings = null;
@@ -403,7 +380,7 @@ export default function App() {
       dispatch({ type: 'ADD_TRANSACTION', payload: { transaction, user: getUserName() }});
     } catch (e) { 
       console.error("Buluta kaydederken hata oluştu: ", e); 
-      alert("HATA: İşlem Firebase'e kaydedilemedi! Lütfen Firebase 'Rules' sekmesinden okuma/yazma izinlerinizi güncelleyin.");
+      alert("HATA: İşlem kaydedilemedi! Lütfen Firebase izinlerini kontrol edin.");
     }
   };
 
@@ -426,7 +403,7 @@ export default function App() {
       dispatch({ type: 'ADD_BULK_TRANSACTIONS', payload: { transactions: txsArray, user: getUserName() }});
     } catch (e) { 
       console.error("Toplu tahsilat kaydedilemedi: ", e); 
-      alert("HATA: Toplu işlem Firebase'e kaydedilemedi! Lütfen Firebase izinlerinizi kontrol edin.");
+      alert("HATA: Toplu işlem kaydedilemedi! Lütfen Firebase izinlerinizi kontrol edin.");
     }
   };
 
@@ -455,7 +432,7 @@ export default function App() {
       dispatch({ type: 'ADD_BULK_DUE', payload: { type, description, user: getUserName() }});
     } catch (e) { 
       console.error("Toplu borçlandırma kaydedilemedi: ", e); 
-      alert("HATA: Toplu borçlandırma Firebase'e kaydedilemedi! Lütfen Firebase izinlerinizi kontrol edin.");
+      alert("HATA: Toplu borçlandırma kaydedilemedi! Lütfen Firebase izinlerinizi kontrol edin.");
     }
   };
   
@@ -466,7 +443,6 @@ export default function App() {
       return true;
     } catch (e) { 
       console.error("Kişi buluta kaydedilemedi:", e); 
-      alert("KAYIT BAŞARISIZ! Lütfen Firebase 'Rules' izinlerinizi güncelleyin.");
       return false;
     }
   };
@@ -483,7 +459,6 @@ export default function App() {
       return true;
     } catch (e) { 
       console.error("Kişiler toplu olarak buluta kaydedilemedi:", e); 
-      alert("KAYIT BAŞARISIZ! Lütfen Firebase 'Rules' izinlerinizi güncelleyin.");
       return false;
     }
   };
@@ -494,7 +469,7 @@ export default function App() {
       dispatch({ type: 'EDIT_TRANSACTION', payload: { id, updatedData, user: getUserName() }});
     } catch (e) { 
       console.error("Bulutta güncellenirken hata:", e); 
-      alert("HATA: Güncelleme Firebase'e kaydedilemedi! Firebase izinlerini kontrol edin.");
+      alert("HATA: Güncelleme kaydedilemedi! Firebase izinlerini kontrol edin.");
     }
   };
 
@@ -505,7 +480,6 @@ export default function App() {
       return true;
     } catch (e) { 
       console.error("Ayarlar buluta kaydedilemedi:", e); 
-      alert("KAYIT BAŞARISIZ! Lütfen Firebase 'Rules' izinlerinizi güncelleyin.");
       return false;
     }
   };
@@ -542,7 +516,7 @@ export default function App() {
         setDeleteDialog({ isOpen: false, id: null, isGroup: false });
       } catch (error) {
         console.error("Buluttan silerken hata:", error);
-        alert("HATA: Silme işlemi Firebase'e yansıtılamadı! Firebase izinlerini kontrol edin.");
+        alert("HATA: Silme işlemi yansıtılamadı! Firebase izinlerini kontrol edin.");
       }
     } else setPasswordError("Hatalı şifre! Lütfen tekrar deneyin.");
   };
@@ -898,8 +872,7 @@ function AdminOverview({ computations, allTransactions, units }) {
               <h2 className="text-2xl font-bold uppercase tracking-wide text-slate-800">Genel Durum ve Finansal Analiz Raporu</h2>
               <p className="text-slate-600 mt-1">Yükseller Apartmanı • Rapor Tarihi: {new Date().toLocaleDateString('tr-TR')} {new Date().toLocaleTimeString('tr-TR')}</p>
             </div>
-            {/* PDF'E AKTAR BUTONU DEĞİŞİMİ */}
-            <button onClick={() => handleExportPDF('overview-print', 'Genel_Durum_Raporu')} className="no-print bg-slate-800 text-white px-5 py-2.5 rounded-lg flex items-center hover:bg-slate-900 font-bold transition-colors shadow-sm"><Printer size={18} className="mr-2"/> PDF / Yazdır</button>
+            <button onClick={() => handlePrint('overview-print', 'Genel_Durum_Raporu')} className="no-print bg-slate-800 text-white px-5 py-2.5 rounded-lg flex items-center hover:bg-slate-900 font-bold transition-colors shadow-sm"><Printer size={18} className="mr-2"/> PDF İndir / Yazdır</button>
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
@@ -1260,8 +1233,7 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input type="text" placeholder="Birim, Malik veya Kiracı ara..." className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm bg-white outline-none focus:ring-2 focus:ring-blue-500" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
         </div>
-        {/* PDF'E AKTAR BUTONU DEĞİŞİMİ */}
-        <button onClick={() => handleExportPDF('units-print-table', 'Birimler_Listesi')} className="bg-slate-800 text-white px-4 py-2 rounded-lg flex items-center hover:bg-slate-900 text-sm font-bold transition-colors shadow-sm"><Printer size={16} className="mr-2"/> PDF / Yazdır</button>
+        <button onClick={() => handlePrint('units-print-table', 'Birimler_Listesi')} className="bg-slate-800 text-white px-4 py-2 rounded-lg flex items-center hover:bg-slate-900 text-sm font-medium transition-colors shadow-sm"><Printer size={16} className="mr-2"/> PDF İndir / Yazdır</button>
       </div>
 
       {showImportModal && ( 
@@ -1543,8 +1515,7 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
                                       <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                                       <input type="text" placeholder="Açıklama ara..." className="w-full pl-9 px-3 py-1.5 border border-slate-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500" value={ekstreSearchTerm} onChange={e => setEkstreSearchTerm(e.target.value)} />
                                     </div>
-                                    {/* BİRİM EKSTRESİ PDF AKTAR BUTONU */}
-                                    <button onClick={() => handleExportPDF(`ekstre-print-${unit.id}`, `${unit.name}_Ekstresi`)} className="bg-slate-800 text-white px-4 py-1.5 rounded-lg flex items-center hover:bg-slate-900 text-sm font-bold w-full sm:w-auto justify-center"><Printer size={16} className="mr-2"/> PDF Al</button>
+                                    <button onClick={() => handlePrint(`ekstre-print-${unit.id}`, `Ekstre_${unit.name}`)} className="bg-slate-800 text-white px-3 py-1.5 rounded-lg flex items-center hover:bg-slate-900 text-sm font-medium w-full sm:w-auto justify-center"><Printer size={16}/></button>
                                   </div>
                                 </div>
                                 <div id={`ekstre-print-${unit.id}`} className="max-h-80 overflow-y-auto border border-slate-200 rounded-lg bg-white">
@@ -1808,8 +1779,7 @@ function AdminExpenses({ transactions, onAddTransaction, onAddBulkTransactions }
               <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input type="text" placeholder="Açıklama ara..." className="w-full pl-9 pr-3 py-1.5 border border-slate-300 rounded-lg text-sm font-medium" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
             </div>
-            {/* GİDER PDF AKTAR BUTONU */}
-            <button onClick={() => handleExportPDF('expenses-print-table', 'Giderler_Tablosu')} className="bg-slate-800 text-white px-4 py-1.5 rounded-lg flex items-center justify-center hover:bg-slate-900 text-sm font-bold w-full sm:w-auto"><Printer size={16} className="mr-2"/> PDF / Yazdır</button>
+            <button onClick={() => handlePrint('expenses-print-table', 'Gider_Tablosu')} className="bg-slate-800 text-white px-4 py-1.5 rounded-lg flex items-center justify-center hover:bg-slate-900 text-sm font-medium w-full sm:w-auto"><Printer size={16} className="mr-2"/> PDF İndir / Yazdır</button>
           </div>
         </div>
         
@@ -1915,9 +1885,8 @@ function AdminHistoryTabs({ transactions, sysLogs, onDeleteTransaction, onDelete
       
       <div className="flex justify-between items-center p-6 border-b border-slate-100 bg-slate-50 no-print">
         <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2"><History className="text-slate-500"/> Kayıtlar & Sistem İzi</h2>
-        {/* GEÇMİŞ PDF'E AKTAR BUTONU DEĞİŞİMİ */}
-        <button onClick={() => handleExportPDF('history-print-table', 'Islem_Gecmisi')} className="flex items-center gap-2 bg-slate-800 text-white px-4 py-2 rounded-lg font-bold transition hover:bg-slate-900 shadow-sm">
-          <Printer size={18} /> PDF / Yazdır
+        <button onClick={() => handlePrint('history-print-table', 'Islem_Gecmisi')} className="flex items-center gap-2 bg-slate-800 text-white px-4 py-2 rounded-lg font-medium transition hover:bg-slate-900 shadow-sm">
+          <Printer size={18} /> PDF İndir / Yazdır
         </button>
       </div>
 
@@ -2051,8 +2020,7 @@ function AdminReport({ computations, transactions }) {
           <h2 className="text-2xl font-bold uppercase tracking-wide text-slate-800">Yönetim Kurulu Faaliyet & Denetim Raporu</h2>
           <p className="text-slate-600 mt-1">Yükseller Apartmanı • Rapor Tarihi: {new Date().toLocaleDateString('tr-TR')}</p>
         </div>
-        {/* DENETÇİ RAPORU PDF AKTAR BUTONU DEĞİŞİMİ */}
-        <button onClick={() => handleExportPDF('auditor-report-print', 'Denetci_Raporu')} className="no-print bg-slate-800 text-white px-5 py-2.5 rounded-lg flex items-center hover:bg-slate-900 font-bold transition-colors shadow-sm"><Printer size={18} className="mr-2"/> PDF / Yazdır</button>
+        <button onClick={() => handlePrint('auditor-report-print', 'Denetci_Raporu')} className="no-print bg-slate-800 text-white px-5 py-2.5 rounded-lg flex items-center hover:bg-slate-900 font-bold transition-colors shadow-sm"><Printer size={18} className="mr-2"/> PDF İndir / Yazdır</button>
       </div>
 
       <div className="space-y-6 text-slate-700 leading-relaxed text-justify">
@@ -2209,8 +2177,7 @@ function AdminAssembly({ units, computations, transactions, settings }) {
               <><button onClick={() => setDocType('yonetim')} className={`px-4 py-2 rounded-lg font-medium transition-colors ${docType === 'yonetim' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Yönetim Raporu</button><button onClick={() => setDocType('denetim')} className={`px-4 py-2 rounded-lg font-medium transition-colors ${docType === 'denetim' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Denetim Raporu</button></>
             )}
           </div>
-          {/* GENEL KURUL PDF'E AKTAR BUTONU DEĞİŞİMİ */}
-          <button onClick={() => handleExportPDF('printable-assembly-doc', 'Genel_Kurul_Evraklari')} className="bg-slate-800 hover:bg-slate-900 text-white px-6 py-2 rounded-lg flex items-center shadow-sm transition-colors font-bold"><Printer size={18} className="mr-2" /> PDF / Yazdır</button>
+          <button onClick={() => handlePrint('printable-assembly-doc', 'Genel_Kurul_Evraklari')} className="bg-slate-800 hover:bg-slate-900 text-white px-6 py-2 rounded-lg flex items-center shadow-sm transition-colors font-medium"><Printer size={18} className="mr-2" /> Belgeyi PDF İndir</button>
         </div>
       </div>
 
@@ -2545,8 +2512,7 @@ function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransactio
             <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden" id="resident-history-print">
               <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50 no-print">
                 <h3 className="text-lg font-bold text-slate-800 flex items-center"><History className="mr-2 text-slate-500"/> Hesap Hareketlerim</h3>
-                {/* SAKİN EKSTRE PDF'E AKTAR BUTONU DEĞİŞİMİ */}
-                <button onClick={() => handleExportPDF('resident-history-print', 'Hesap_Hareketlerim')} className="text-slate-700 bg-white hover:bg-slate-100 px-3 py-1.5 rounded-lg flex items-center text-sm font-bold border border-slate-300 transition-colors shadow-sm"><Printer size={16} className="mr-2"/> PDF / Yazdır</button>
+                <button onClick={() => handlePrint('resident-history-print', 'Hesap_Hareketlerim')} className="text-slate-500 hover:text-slate-800 flex items-center text-sm font-medium"><Printer size={16} className="mr-1"/> PDF İndir / Yazdır</button>
               </div>
 
               <div className="print-only mb-6 text-center border-b-2 border-slate-800 pb-4 mt-4 px-6">
@@ -2593,8 +2559,7 @@ function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransactio
           <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden" id="resident-expenses-print">
             <div className="p-6 border-b border-slate-100 bg-slate-50 flex justify-between items-center no-print">
                <h3 className="text-lg font-bold text-slate-800 flex items-center"><ClipboardList className="mr-2 text-slate-500"/> Şeffaf Bina Giderleri</h3>
-               {/* SAKİN GİDERLER PDF'E AKTAR BUTONU DEĞİŞİMİ */}
-               <button onClick={() => handleExportPDF('resident-expenses-print', 'Bina_Giderleri')} className="text-slate-700 bg-white hover:bg-slate-100 px-3 py-1.5 rounded-lg flex items-center text-sm font-bold border border-slate-300 transition-colors shadow-sm"><Printer size={16} className="mr-1"/> PDF / Yazdır</button>
+               <button onClick={() => handlePrint('resident-expenses-print', 'Bina_Giderleri')} className="text-slate-500 hover:text-slate-800 flex items-center text-sm font-medium"><Printer size={16} className="mr-1"/> PDF İndir / Yazdır</button>
             </div>
             
             <div className="print-only mb-6 text-center border-b-2 border-slate-800 pb-4 mt-4 px-6">
