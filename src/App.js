@@ -126,137 +126,46 @@ const appReducer = (state, action) => {
   }
 };
 
-// YENİ DIŞA AKTARMA FONKSİYONU (Word & Excel Renkli Şablon)
-const handleExport = (elementId, format = 'excel', fileName = 'Disa_Aktarim') => {
+// PDF / YAZDIRMA FONKSİYONU (Görselleri ve Renkleri Korur)
+const handleExportPDF = (elementId, fileName = 'Rapor') => {
   const el = document.getElementById(elementId);
   if (!el) return;
-
-  // Gerçek DOM'u etkilememek için klonluyoruz
-  const clone = el.cloneNode(true);
   
-  // Yazdırılmaması/Aktarılmaması gereken elementleri temizle
-  const noPrintElements = clone.querySelectorAll('.no-print');
-  noPrintElements.forEach(elem => elem.remove());
-
-  // İkonların (SVG) Excel/Word'de devasa görünmesini engellemek için sil
-  const svgs = clone.querySelectorAll('svg');
-  svgs.forEach(svg => svg.remove());
-
-  // Bütçe planlayıcı gibi yerlerdeki input/select değerlerini statik metne çevir
-  const originalInputs = el.querySelectorAll('input, select, textarea');
-  const cloneInputs = clone.querySelectorAll('input, select, textarea');
-  originalInputs.forEach((input, index) => {
-      const cloneInput = cloneInputs[index];
-      if (cloneInput) {
-          const span = document.createElement('span');
-          if (input.tagName === 'SELECT') {
-              span.innerText = input.options[input.selectedIndex]?.text || '';
-          } else {
-              span.innerText = input.value || input.innerText;
-          }
-          span.style.fontWeight = 'bold'; // Form değerlerini belirgin yap
-          cloneInput.parentNode.replaceChild(span, cloneInput);
-      }
-  });
-
-  // Word/Excel'in tanıyabileceği, ekrandaki renk/stillerin (Tailwind) karşılıkları
-  const richStyles = `
-    <style>
-      body { font-family: 'Segoe UI', Arial, sans-serif; color: #334155; line-height: 1.5; }
-      h1, h2, h3, h4 { color: #1e293b; margin-bottom: 10px; }
-      
-      /* Tablo Standartları */
-      table { border-collapse: collapse; width: 100%; margin-bottom: 20px; border: 1px solid #cbd5e1; }
-      th { background-color: #f8fafc; color: #475569; font-weight: bold; border: 1px solid #cbd5e1; padding: 12px; text-align: left; }
-      td { border: 1px solid #e2e8f0; padding: 10px; vertical-align: middle; }
-      tr:nth-child(even) { background-color: #f8fafc; }
-      
-      /* Arka plan renkleri */
-      .bg-slate-50 { background-color: #f8fafc; }
-      .bg-slate-100 { background-color: #f1f5f9; }
-      .bg-slate-200 { background-color: #e2e8f0; }
-      .bg-emerald-50, .bg-emerald-100 { background-color: #d1fae5; }
-      .bg-red-50, .bg-red-100 { background-color: #fee2e2; }
-      .bg-orange-50, .bg-orange-100 { background-color: #ffedd5; }
-      .bg-blue-50, .bg-blue-100 { background-color: #dbeafe; }
-      .bg-indigo-50, .bg-indigo-100 { background-color: #e0e7ff; }
-      .bg-purple-100 { background-color: #f3e8ff; }
-      
-      /* Metin renkleri */
-      .text-slate-400 { color: #94a3b8; }
-      .text-slate-500 { color: #64748b; }
-      .text-slate-600 { color: #475569; }
-      .text-slate-700 { color: #334155; }
-      .text-slate-800 { color: #1e293b; }
-      .text-emerald-600, .text-emerald-700 { color: #059669; }
-      .text-red-500, .text-red-600 { color: #dc2626; }
-      .text-orange-600 { color: #ea580c; }
-      .text-blue-600 { color: #2563eb; }
-      .text-indigo-600 { color: #4f46e5; }
-      .text-purple-700 { color: #7e22ce; }
-      
-      /* Tipografi & Düzen */
-      .font-bold, strong { font-weight: bold; }
-      .font-medium { font-weight: 500; }
-      .text-right { text-align: right; }
-      .text-center { text-align: center; }
-      .text-sm { font-size: 13px; }
-      .text-xs { font-size: 11px; }
-      .uppercase { text-transform: uppercase; }
-      .italic { font-style: italic; }
-      
-      /* Excel'de Box/Grid yapılarının düzgün durması için dönüşümler */
-      .grid { display: table; width: 100%; border-spacing: 10px; }
-      .grid > div { display: table-cell; padding: 15px; border: 1px solid #cbd5e1; vertical-align: top; background-color:#fff;}
-      .divide-y > div { border-bottom: 1px solid #e2e8f0; padding: 10px 0; }
-      
-      /* Rozet (Badge) tasarımları */
-      span.px-2, span.px-3 { display: inline-block; padding: 4px 8px; border-radius: 4px; border: 1px solid #cbd5e1; margin: 2px; }
-      
-      /* Div kenarlıkları ve boşluklar */
-      .border, .border-b, .border-t { border: 1px solid #cbd5e1; }
-      .p-4 { padding: 15px; }
-      .p-6 { padding: 20px; }
-      .mb-4 { margin-bottom: 15px; }
-      .mb-8 { margin-bottom: 30px; }
-      .rounded-xl, .rounded-lg { border-radius: 8px; }
-    </style>
-  `;
-
-  const htmlContent = clone.innerHTML;
-
-  if (format === 'excel') {
-      const uri = 'data:application/vnd.ms-excel;base64,';
-      const template = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="UTF-8">${richStyles}</head><body>${htmlContent}</body></html>`;
-      
-      const base64 = function(s) { return window.btoa(unescape(encodeURIComponent(s))) };
-      
-      const link = document.createElement("a");
-      link.href = uri + base64(template);
-      link.download = fileName + '.xls';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-
-  } else if (format === 'word') {
-      const wordStyles = `
-        <style>
-          @page WordSection1 { size: 21cm 29.7cm; margin: 2cm 2cm 2cm 2cm; }
-          div.WordSection1 { page: WordSection1; }
-        </style>
-      `;
-      const header = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'>${richStyles}${wordStyles}</head><body><div class="WordSection1">`;
-      const footer = "</div></body></html>";
-      
-      const sourceHTML = header + htmlContent + footer;
-      const source = 'data:application/vnd.ms-word;charset=utf-8,' + encodeURIComponent(sourceHTML);
-      
-      const link = document.createElement("a");
-      link.href = source;
-      link.download = fileName + '.doc';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+  const printWindow = window.open('', '_blank');
+  if (printWindow) {
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>${fileName} - Yükseller Apartmanı</title>
+          <script src="https://cdn.tailwindcss.com"></script>
+          <style>
+            @page { size: A4 portrait; margin: 12mm; }
+            @media print {
+              /* Arka plan renklerinin ve gölgelerin PDF'te çıkmasını zorunlu kılar */
+              body { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; background: white; font-size: 10pt;}
+              .no-print { display: none !important; }
+              .print-only { display: block !important; }
+              table { page-break-inside: auto; width: 100%; border-collapse: collapse; }
+              tr { page-break-inside: avoid; page-break-after: auto; }
+              thead { display: table-header-group; }
+              th, td { padding: 8px !important; }
+              * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            }
+          </style>
+        </head>
+        <body>
+          ${el.innerHTML}
+          <script>
+            // Tailwind CSS'in yüklenmesi ve stillerin uygulanması için kısa bir süre bekliyoruz
+            setTimeout(() => {
+              window.print();
+              window.close();
+            }, 1000);
+          </script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
   }
 };
 
@@ -989,8 +898,8 @@ function AdminOverview({ computations, allTransactions, units }) {
               <h2 className="text-2xl font-bold uppercase tracking-wide text-slate-800">Genel Durum ve Finansal Analiz Raporu</h2>
               <p className="text-slate-600 mt-1">Yükseller Apartmanı • Rapor Tarihi: {new Date().toLocaleDateString('tr-TR')} {new Date().toLocaleTimeString('tr-TR')}</p>
             </div>
-            {/* WORD'E AKTAR BUTONU DEĞİŞİMİ */}
-            <button onClick={() => handleExport('overview-print', 'word', 'Genel_Durum_Raporu')} className="no-print bg-blue-700 text-white px-5 py-2.5 rounded-lg flex items-center hover:bg-blue-800 font-bold transition-colors shadow-sm"><FileText size={18} className="mr-2"/> Word'e Aktar</button>
+            {/* PDF'E AKTAR BUTONU DEĞİŞİMİ */}
+            <button onClick={() => handleExportPDF('overview-print', 'Genel_Durum_Raporu')} className="no-print bg-slate-800 text-white px-5 py-2.5 rounded-lg flex items-center hover:bg-slate-900 font-bold transition-colors shadow-sm"><Printer size={18} className="mr-2"/> PDF / Yazdır</button>
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
@@ -1351,8 +1260,8 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input type="text" placeholder="Birim, Malik veya Kiracı ara..." className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm bg-white outline-none focus:ring-2 focus:ring-blue-500" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
         </div>
-        {/* EXCEL'E AKTAR BUTONU DEĞİŞİMİ */}
-        <button onClick={() => handleExport('units-print-table', 'excel', 'Birimler_Listesi')} className="bg-emerald-700 text-white px-4 py-2 rounded-lg flex items-center hover:bg-emerald-800 text-sm font-bold transition-colors shadow-sm"><List size={16} className="mr-2"/> Excel'e Aktar</button>
+        {/* PDF'E AKTAR BUTONU DEĞİŞİMİ */}
+        <button onClick={() => handleExportPDF('units-print-table', 'Birimler_Listesi')} className="bg-slate-800 text-white px-4 py-2 rounded-lg flex items-center hover:bg-slate-900 text-sm font-bold transition-colors shadow-sm"><Printer size={16} className="mr-2"/> PDF / Yazdır</button>
       </div>
 
       {showImportModal && ( 
@@ -1634,8 +1543,8 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
                                       <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                                       <input type="text" placeholder="Açıklama ara..." className="w-full pl-9 px-3 py-1.5 border border-slate-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500" value={ekstreSearchTerm} onChange={e => setEkstreSearchTerm(e.target.value)} />
                                     </div>
-                                    {/* BİRİM EKSTRESİ EXCEL AKTAR BUTONU */}
-                                    <button onClick={() => handleExport(`ekstre-print-${unit.id}`, 'excel', `${unit.name}_Ekstresi`)} className="bg-emerald-700 text-white px-3 py-1.5 rounded-lg flex items-center hover:bg-emerald-800 text-sm font-bold w-full sm:w-auto justify-center"><List size={16}/></button>
+                                    {/* BİRİM EKSTRESİ PDF AKTAR BUTONU */}
+                                    <button onClick={() => handleExportPDF(`ekstre-print-${unit.id}`, `${unit.name}_Ekstresi`)} className="bg-slate-800 text-white px-4 py-1.5 rounded-lg flex items-center hover:bg-slate-900 text-sm font-bold w-full sm:w-auto justify-center"><Printer size={16} className="mr-2"/> PDF Al</button>
                                   </div>
                                 </div>
                                 <div id={`ekstre-print-${unit.id}`} className="max-h-80 overflow-y-auto border border-slate-200 rounded-lg bg-white">
@@ -1899,8 +1808,8 @@ function AdminExpenses({ transactions, onAddTransaction, onAddBulkTransactions }
               <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input type="text" placeholder="Açıklama ara..." className="w-full pl-9 pr-3 py-1.5 border border-slate-300 rounded-lg text-sm font-medium" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
             </div>
-            {/* GİDER EXCEL AKTAR BUTONU */}
-            <button onClick={() => handleExport('expenses-print-table', 'excel', 'Giderler_Tablosu')} className="bg-emerald-700 text-white px-4 py-1.5 rounded-lg flex items-center justify-center hover:bg-emerald-800 text-sm font-bold w-full sm:w-auto"><List size={16} className="mr-2"/> Excel'e Aktar</button>
+            {/* GİDER PDF AKTAR BUTONU */}
+            <button onClick={() => handleExportPDF('expenses-print-table', 'Giderler_Tablosu')} className="bg-slate-800 text-white px-4 py-1.5 rounded-lg flex items-center justify-center hover:bg-slate-900 text-sm font-bold w-full sm:w-auto"><Printer size={16} className="mr-2"/> PDF / Yazdır</button>
           </div>
         </div>
         
@@ -2006,9 +1915,9 @@ function AdminHistoryTabs({ transactions, sysLogs, onDeleteTransaction, onDelete
       
       <div className="flex justify-between items-center p-6 border-b border-slate-100 bg-slate-50 no-print">
         <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2"><History className="text-slate-500"/> Kayıtlar & Sistem İzi</h2>
-        {/* GEÇMİŞ EXCEL'E AKTAR BUTONU DEĞİŞİMİ */}
-        <button onClick={() => handleExport('history-print-table', 'excel', 'Islem_Gecmisi')} className="flex items-center gap-2 bg-emerald-700 text-white px-4 py-2 rounded-lg font-bold transition hover:bg-emerald-800 shadow-sm">
-          <List size={18} /> Excel'e Aktar
+        {/* GEÇMİŞ PDF'E AKTAR BUTONU DEĞİŞİMİ */}
+        <button onClick={() => handleExportPDF('history-print-table', 'Islem_Gecmisi')} className="flex items-center gap-2 bg-slate-800 text-white px-4 py-2 rounded-lg font-bold transition hover:bg-slate-900 shadow-sm">
+          <Printer size={18} /> PDF / Yazdır
         </button>
       </div>
 
@@ -2142,8 +2051,8 @@ function AdminReport({ computations, transactions }) {
           <h2 className="text-2xl font-bold uppercase tracking-wide text-slate-800">Yönetim Kurulu Faaliyet & Denetim Raporu</h2>
           <p className="text-slate-600 mt-1">Yükseller Apartmanı • Rapor Tarihi: {new Date().toLocaleDateString('tr-TR')}</p>
         </div>
-        {/* DENETÇİ RAPORU WORD AKTAR BUTONU DEĞİŞİMİ */}
-        <button onClick={() => handleExport('auditor-report-print', 'word', 'Denetci_Raporu')} className="no-print bg-blue-700 text-white px-5 py-2.5 rounded-lg flex items-center hover:bg-blue-800 font-bold transition-colors shadow-sm"><FileText size={18} className="mr-2"/> Word'e Aktar</button>
+        {/* DENETÇİ RAPORU PDF AKTAR BUTONU DEĞİŞİMİ */}
+        <button onClick={() => handleExportPDF('auditor-report-print', 'Denetci_Raporu')} className="no-print bg-slate-800 text-white px-5 py-2.5 rounded-lg flex items-center hover:bg-slate-900 font-bold transition-colors shadow-sm"><Printer size={18} className="mr-2"/> PDF / Yazdır</button>
       </div>
 
       <div className="space-y-6 text-slate-700 leading-relaxed text-justify">
@@ -2300,8 +2209,8 @@ function AdminAssembly({ units, computations, transactions, settings }) {
               <><button onClick={() => setDocType('yonetim')} className={`px-4 py-2 rounded-lg font-medium transition-colors ${docType === 'yonetim' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Yönetim Raporu</button><button onClick={() => setDocType('denetim')} className={`px-4 py-2 rounded-lg font-medium transition-colors ${docType === 'denetim' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Denetim Raporu</button></>
             )}
           </div>
-          {/* GENEL KURUL WORD'E AKTAR BUTONU DEĞİŞİMİ */}
-          <button onClick={() => handleExport('printable-assembly-doc', 'word', 'Genel_Kurul_Evraklari')} className="bg-blue-700 hover:bg-blue-800 text-white px-6 py-2 rounded-lg flex items-center shadow-sm transition-colors font-bold"><FileText size={18} className="mr-2" /> Word'e Aktar</button>
+          {/* GENEL KURUL PDF'E AKTAR BUTONU DEĞİŞİMİ */}
+          <button onClick={() => handleExportPDF('printable-assembly-doc', 'Genel_Kurul_Evraklari')} className="bg-slate-800 hover:bg-slate-900 text-white px-6 py-2 rounded-lg flex items-center shadow-sm transition-colors font-bold"><Printer size={18} className="mr-2" /> PDF / Yazdır</button>
         </div>
       </div>
 
@@ -2636,8 +2545,8 @@ function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransactio
             <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden" id="resident-history-print">
               <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50 no-print">
                 <h3 className="text-lg font-bold text-slate-800 flex items-center"><History className="mr-2 text-slate-500"/> Hesap Hareketlerim</h3>
-                {/* SAKİN EKSTRE EXCEL'E AKTAR BUTONU DEĞİŞİMİ */}
-                <button onClick={() => handleExport('resident-history-print', 'excel', 'Hesap_Hareketlerim')} className="text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg flex items-center text-sm font-bold border border-emerald-200 transition-colors"><List size={16} className="mr-2"/> Excel'e Aktar</button>
+                {/* SAKİN EKSTRE PDF'E AKTAR BUTONU DEĞİŞİMİ */}
+                <button onClick={() => handleExportPDF('resident-history-print', 'Hesap_Hareketlerim')} className="text-slate-700 bg-white hover:bg-slate-100 px-3 py-1.5 rounded-lg flex items-center text-sm font-bold border border-slate-300 transition-colors shadow-sm"><Printer size={16} className="mr-2"/> PDF / Yazdır</button>
               </div>
 
               <div className="print-only mb-6 text-center border-b-2 border-slate-800 pb-4 mt-4 px-6">
@@ -2684,8 +2593,8 @@ function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransactio
           <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden" id="resident-expenses-print">
             <div className="p-6 border-b border-slate-100 bg-slate-50 flex justify-between items-center no-print">
                <h3 className="text-lg font-bold text-slate-800 flex items-center"><ClipboardList className="mr-2 text-slate-500"/> Şeffaf Bina Giderleri</h3>
-               {/* SAKİN GİDERLER EXCEL'E AKTAR BUTONU DEĞİŞİMİ */}
-               <button onClick={() => handleExport('resident-expenses-print', 'excel', 'Bina_Giderleri')} className="text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg flex items-center text-sm font-bold border border-emerald-200 transition-colors"><List size={16} className="mr-1"/> Excel'e Aktar</button>
+               {/* SAKİN GİDERLER PDF'E AKTAR BUTONU DEĞİŞİMİ */}
+               <button onClick={() => handleExportPDF('resident-expenses-print', 'Bina_Giderleri')} className="text-slate-700 bg-white hover:bg-slate-100 px-3 py-1.5 rounded-lg flex items-center text-sm font-bold border border-slate-300 transition-colors shadow-sm"><Printer size={16} className="mr-1"/> PDF / Yazdır</button>
             </div>
             
             <div className="print-only mb-6 text-center border-b-2 border-slate-800 pb-4 mt-4 px-6">
