@@ -513,18 +513,18 @@ export default function App() {
         setAutoToast("HATA: Silme işlemi yansıtılamadı! Firebase izinlerini kontrol edin.");
         setTimeout(() => setAutoToast(null), 4000);
       }
-    } else setPasswordError("Hatalı şifre! Lütfen tekrar deneyin.");
+      } else setPasswordError("Hatalı şifre! Lütfen tekrar deneyin.");
   };
 
   return (
     <>
       <style dangerouslySetInnerHTML={{__html: `
         @media print {
-          @page { size: A4 portrait; margin: 12mm; }
-          body { -webkit-print-color-adjust: exact; print-color-adjust: exact; background: white; }
+          @page { size: A4 portrait; margin: 0; } /* Sayfa kenarındaki tarayıcı bilgi yazılarını gizler */
+          body { -webkit-print-color-adjust: exact; print-color-adjust: exact; background: white; margin: 0; padding: 0; }
           body * { visibility: hidden; }
           .print-target, .print-target * { visibility: visible !important; }
-          .print-target { position: absolute; left: 0; top: 0; width: 100%; height: auto; margin: 0; padding: 0; background: white; }
+          .print-target { position: absolute; left: 0; top: 0; width: 100%; height: auto; margin: 0; padding: 15mm; background: white; box-sizing: border-box; } /* İçeriğin kesilmemesi için padding eklendi */
           .no-print, .no-print * { display: none !important; }
           .print-only { display: block !important; }
           
