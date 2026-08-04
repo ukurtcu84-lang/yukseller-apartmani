@@ -520,16 +520,16 @@ export default function App() {
     <>
       <style dangerouslySetInnerHTML={{__html: `
         @media print {
-          @page { size: A4 portrait; margin: 0; } /* Sayfa kenarındaki tarayıcı bilgi yazılarını gizler */
+          @page { size: A4 portrait; margin: 15mm; } /* Her sayfada üst/alt ve yan boşlukları garanti eder */
           body { -webkit-print-color-adjust: exact; print-color-adjust: exact; background: white; margin: 0; padding: 0; }
           body * { visibility: hidden; }
           .print-target, .print-target * { visibility: visible !important; }
-          .print-target { position: absolute; left: 0; top: 0; width: 100%; height: auto; margin: 0; padding: 15mm; background: white; box-sizing: border-box; } /* İçeriğin kesilmemesi için padding eklendi */
+          .print-target { position: absolute; left: 0; top: 0; width: 100%; height: auto; margin: 0; padding: 0; background: white; } /* Padding kaldırıldı, boşlukları @page yönetecek */
           .no-print, .no-print * { display: none !important; }
           .print-only { display: block !important; }
           
           .print-target table { page-break-inside: auto; font-size: 10pt; width: 100%; min-width: auto !important; }
-          .print-target tr { page-break-inside: avoid; page-break-after: auto; }
+          .print-target tr { page-break-inside: avoid; page-break-after: auto; break-inside: avoid; }
           .print-target thead { display: table-header-group; }
           .print-target th, .print-target td { padding: 6px 8px !important; }
           .print-target h1, .print-target h2, .print-target h3 { page-break-after: avoid; }
