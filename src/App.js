@@ -3,8 +3,8 @@ import {
   Building, Store, Home, Users, Wallet, TrendingUp, TrendingDown, 
   LogOut, Plus, FileText, CheckCircle, AlertCircle, Edit, Phone, User, 
   PieChart, Tag, Percent, History, Printer, BookOpen, ClipboardList, 
-  Upload, Trash2, List, ChevronDown, ChevronUp, PlusCircle, X, Undo, Cpu,
-  Search, Filter, Lock, Calculator, Settings, Info, MessageCircle
+  Upload, Trash2, List, ChevronDown, ChevronUp, PlusCircle, X, Cpu,
+  Search, Filter, Lock, Calculator, Settings, Rocket, ArrowRight
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
@@ -23,18 +23,6 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
-const generateUnits = () => {
-  const units = [];
-  for (let i = 1; i <= 44; i++) {
-    units.push({ id: `Daire-${i}`, name: `Daire ${i}`, type: 'daire', residentStatus: 'owner', ownerName: `Malik ${i}`, ownerPhone: '', tenantName: '', tenantPhone: '', password: '1234', arsaPayi: 110 });
-  }
-  const dukkanPaylari = { 45: 140, 46: 140, 47: 70, 48: 70, 49: 70, 50: 90, 51: 321 };
-  for (let i = 45; i <= 51; i++) {
-    units.push({ id: `Dükkan-${i}`, name: `Dükkan ${i}`, type: 'dukkan', residentStatus: 'owner', ownerName: `Dükkan Sahibi ${i}`, ownerPhone: '', tenantName: '', tenantPhone: '', password: '1234', arsaPayi: dukkanPaylari[i] });
-  }
-  return units;
-};
-
 const EXPENSE_CATEGORIES = ['Elektrik', 'Su', 'Asansör', 'Temizlik', 'Maaş/SGK', 'Kıdem Tazminatı Fonu', 'Bakım/Onarım', 'Demirbaş/Yatırım', 'Diğer'];
 const INCOME_CATEGORIES = ['Geçmiş Dönem Devri', 'Banka Faiz Geliri', 'Kıdem Tazminatı Fonu Devri', 'Diğer Gelir'];
 
@@ -44,10 +32,12 @@ const appReducer = (state, action) => {
   const createLog = (actionName, details, user) => ({ id: Date.now() + Math.random(), date: new Date().toISOString(), action: actionName, details, user });
 
   switch (action.type) {
+    case 'SET_BUILDING_CONFIG': return { ...state, buildingConfig: action.payload, isCheckingSetup: false };
+    case 'SET_SETUP_LOADING': return { ...state, isCheckingSetup: action.payload };
     case 'SET_TRANSACTIONS': return { ...state, transactions: action.payload };
     case 'SET_UNITS': {
       const fetchedMap = action.payload.reduce((acc, u) => { acc[u.id] = u; return acc; }, {});
-      const mergedUnits = state.units.map(u => fetchedMap[u.id] ? { ...u, ...fetchedMap[u.id] } : u);
+      const mergedUnits = action.payload; 
       return { ...state, units: mergedUnits };
     }
     case 'SET_SETTINGS': return { ...state, settings: action.payload };
@@ -86,7 +76,7 @@ const appReducer = (state, action) => {
       const { groupId, user } = action.payload;
       return {
         ...state,
-        sysLogs: [createLog('SİLME (TOPLU)', `Bir işlem grubu (grup ID: ${groupId}) ve içerdiği tüm kayıtlar silindi.`, user), ...state.sysLogs]
+        sysLogs: [createLog('SİLME (TOPLU)', `Bir işlem grubu ve içerdiği tüm kayıtlar silindi.`, user), ...state.sysLogs]
       };
     }
     case 'EDIT_TRANSACTION': {
@@ -100,17 +90,14 @@ const appReducer = (state, action) => {
       const { updatedUnit, user } = action.payload;
       return {
         ...state,
-        units: state.units.map(u => u.id === updatedUnit.id ? updatedUnit : u),
-        sysLogs: [createLog('BİRİM GÜNCELLEME', `${updatedUnit.name} biriminin sakin/iletişim bilgileri güncellendi.`, user), ...state.sysLogs]
+        sysLogs: [createLog('BİRİM GÜNCELLEME', `${updatedUnit.name} biriminin bilgileri güncellendi.`, user), ...state.sysLogs]
       };
     }
     case 'UPDATE_BULK_UNITS': {
       const { updatedUnits, user } = action.payload;
-      const unitMap = updatedUnits.reduce((acc, curr) => { acc[curr.id] = curr; return acc; }, {});
       return {
         ...state,
-        units: state.units.map(u => unitMap[u.id] ? { ...u, ...unitMap[u.id] } : u),
-        sysLogs: [createLog('TOPLU BİRİM GÜNCELLEME', `${updatedUnits.length} adet birimin bilgileri (Kişi/Şifre) Excel'den toplu olarak güncellendi.`, user), ...state.sysLogs]
+        sysLogs: [createLog('TOPLU BİRİM GÜNCELLEME', `${updatedUnits.length} adet birimin bilgileri toplu olarak eklendi/güncellendi.`, user), ...state.sysLogs]
       };
     }
     case 'UPDATE_SETTINGS': {
@@ -118,7 +105,7 @@ const appReducer = (state, action) => {
       return {
         ...state,
         settings: { ...state.settings, ...newSettings },
-        sysLogs: [createLog('AYAR GÜNCELLEME', `Sistem bütçe ve maaş parametreleri güncellendi.`, user), ...state.sysLogs]
+        sysLogs: [createLog('AYAR GÜNCELLEME', `Sistem bütçe parametreleri veya site bilgileri güncellendi.`, user), ...state.sysLogs]
       };
     }
     case 'ADD_AUTO_TRANSACTIONS': return state; 
@@ -222,31 +209,6 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
   return newPenalties;
 };
 
-const runAutoReminders = (currentTransactions, currentUnits) => {
-  if (currentTransactions.length === 0) return [];
-  const now = new Date();
-  const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  
-  if (now.getDate() === lastDayOfMonth && now.getHours() >= 12) {
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const groupId = `auto-reminder-${year}-${month}`;
-    
-    const alreadyProcessed = currentTransactions.some(t => t.groupId === groupId);
-    
-    if (!alreadyProcessed) {
-      const { unitBalances } = getBalances(currentTransactions, currentUnits);
-      let debtorsCount = 0;
-      currentUnits.forEach((unit) => { if (unitBalances[unit.id].balance > 0) debtorsCount++; });
-      
-      if (debtorsCount > 0) {
-        return [{ id: `reminder-${year}-${month}-${Math.random()}`, date: now.toISOString(), type: 'system_marker', amount: 0, unitId: null, description: `Sistem Bildirimi: ${debtorsCount} borçlu malikin cihazına (Telefon/Bilgisayar) son gün ödeme bildirimi gönderildi.`, groupId: groupId }];
-      }
-    }
-  }
-  return [];
-};
-
 const getTypeBadge = (type) => {
   switch(type) {
     case 'payment': return <span className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded text-xs font-bold whitespace-nowrap">Tahsilat</span>;
@@ -267,59 +229,55 @@ export default function App() {
   const [autoToast, setAutoToast] = useState(null);
 
   const [state, dispatch] = useReducer(appReducer, {
-    units: generateUnits(),
+    buildingConfig: null,
+    isCheckingSetup: true,
+    units: [],
     transactions: [],
-    sysLogs: [{ id: 1, date: new Date().toISOString(), action: 'SİSTEM BAŞLATILDI', details: 'Apartman yönetim sistemi aktif edildi.', user: 'Sistem' }],
+    sysLogs: [{ id: 1, date: new Date().toISOString(), action: 'SİSTEM BAŞLATILDI', details: 'Sistem aktif.', user: 'Sistem' }],
     settings: initialSettings
   });
 
-  const { units, transactions, sysLogs, settings } = state;
+  const { buildingConfig, isCheckingSetup, units, transactions, sysLogs, settings } = state;
 
   useEffect(() => {
-    const handleWheel = () => {
-      if (document.activeElement && document.activeElement.type === 'number') {
-        document.activeElement.blur(); 
+    const unsubBuilding = onSnapshot(doc(db, "settings", "building"), async (docSnap) => {
+      if (docSnap.exists()) {
+        dispatch({ type: 'SET_BUILDING_CONFIG', payload: docSnap.data() });
+      } else {
+        // Otomatik Taşıma (Eski Yükseller Verisi Varsa)
+        const unitsSnap = await getDocs(collection(db, "units"));
+        if (!unitsSnap.empty) {
+          const legacyConfig = { buildingName: "Yükseller Apartmanı", adminPassword: "admin", isSetupComplete: true };
+          await setDoc(doc(db, "settings", "building"), legacyConfig);
+          dispatch({ type: 'SET_BUILDING_CONFIG', payload: legacyConfig });
+        } else {
+          dispatch({ type: 'SET_BUILDING_CONFIG', payload: null });
+        }
       }
-    };
-    window.addEventListener('wheel', handleWheel, { passive: true });
-    return () => window.removeEventListener('wheel', handleWheel);
-  }, []);
+    });
 
-  useEffect(() => {
     const unsubTxs = onSnapshot(collection(db, "transactions"), (snapshot) => {
       const fetchedTxs = [];
       snapshot.forEach((doc) => fetchedTxs.push({ id: doc.id, ...doc.data() }));
       fetchedTxs.sort((a, b) => new Date(b.date) - new Date(a.date));
       dispatch({ type: 'SET_TRANSACTIONS', payload: fetchedTxs });
-    }, (error) => console.error("İşlemler dinlenemedi:", error));
+    });
 
     const unsubUnits = onSnapshot(collection(db, "units"), (snapshot) => {
-      if (!snapshot.empty) {
-        const fetchedUnits = [];
-        snapshot.forEach((doc) => fetchedUnits.push(doc.data()));
-        dispatch({ type: 'SET_UNITS', payload: fetchedUnits });
-      }
-    }, (error) => {
-      console.error("Kişiler dinlenemedi:", error);
+      const fetchedUnits = [];
+      snapshot.forEach((doc) => fetchedUnits.push(doc.data()));
+      dispatch({ type: 'SET_UNITS', payload: fetchedUnits });
     });
 
     const unsubSettings = onSnapshot(collection(db, "settings"), (snapshot) => {
-      if (!snapshot.empty) {
-        let fetchedSettings = null;
-        snapshot.forEach((doc) => {
-          if (doc.id === 'general') fetchedSettings = doc.data();
-        });
-        if (fetchedSettings) {
-          dispatch({ type: 'SET_SETTINGS', payload: fetchedSettings });
-        }
-      }
-    }, (error) => console.error("Ayarlar dinlenemedi:", error));
+      let fetchedSettings = initialSettings;
+      snapshot.forEach((doc) => {
+        if (doc.id === 'general') fetchedSettings = { ...initialSettings, ...doc.data() };
+      });
+      dispatch({ type: 'SET_SETTINGS', payload: fetchedSettings });
+    });
 
-    return () => {
-      unsubTxs();
-      unsubUnits();
-      unsubSettings();
-    };
+    return () => { unsubBuilding(); unsubTxs(); unsubUnits(); unsubSettings(); };
   }, []);
 
   const computations = useMemo(() => getBalances(transactions, units), [transactions, units]);
@@ -333,27 +291,18 @@ export default function App() {
     setCurrentUser(userId);
     
     const newPenalties = runAutoPenalties(transactions, units);
-    const newReminders = runAutoReminders(transactions, units);
-    
-    if (newPenalties.length > 0 || newReminders.length > 0) {
-      const autoTxs = [...newPenalties, ...newReminders];
-      
+    if (newPenalties.length > 0) {
       const batch = writeBatch(db);
-      autoTxs.forEach(tx => {
+      newPenalties.forEach(tx => {
         const docRef = doc(collection(db, "transactions"));
         batch.set(docRef, { ...tx, addedBy: 'Sistem' });
       });
       batch.commit().catch(e => console.error("Otomatik loglar kaydedilemedi", e));
 
-      dispatch({ type: 'ADD_AUTO_TRANSACTIONS', payload: autoTxs });
-      
-      let msgs = [];
+      dispatch({ type: 'ADD_AUTO_TRANSACTIONS', payload: newPenalties });
       const penaltyCount = newPenalties.filter(t => t.type === 'penalty').length;
-      if (penaltyCount > 0) msgs.push(`Geçmiş aylara ait ${penaltyCount} adet gecikme faizi yansıtıldı.`);
-      if (newReminders.length > 0) msgs.push(`Borçlu maliklere son gün ödeme hatırlatması gönderildi.`);
-      
-      if (msgs.length > 0) {
-        setAutoToast(`Sistem taraması: ${msgs.join(' | ')}`);
+      if (penaltyCount > 0) {
+        setAutoToast(`Sistem taraması: Geçmiş aylara ait ${penaltyCount} adet gecikme faizi yansıtıldı.`);
         setTimeout(() => setAutoToast(null), 7000);
       }
     }
@@ -362,16 +311,31 @@ export default function App() {
   const handleLogout = () => setCurrentUser(null);
   const getUserName = () => currentUser === 'admin' ? 'Yönetici' : currentUser;
 
+  const handleSetupComplete = async (config, importedUnits) => {
+    try {
+      const batch = writeBatch(db);
+      // Kurulum ayarlarını kaydet
+      batch.set(doc(db, "settings", "building"), config);
+      
+      // Birimleri kaydet
+      importedUnits.forEach(u => {
+        const ref = doc(db, "units", String(u.id));
+        batch.set(ref, u);
+      });
+
+      await batch.commit();
+    } catch (e) {
+      console.error("Kurulum hatası:", e);
+      alert("Kurulum tamamlanamadı. Veritabanı izinlerini kontrol edin.");
+    }
+  };
+
   const addTransaction = async (transaction) => {
     try {
-      await addDoc(collection(db, "transactions"), {
-        ...transaction, date: transaction.date || new Date().toISOString(), addedBy: getUserName()
-      });
+      await addDoc(collection(db, "transactions"), { ...transaction, date: transaction.date || new Date().toISOString(), addedBy: getUserName() });
       dispatch({ type: 'ADD_TRANSACTION', payload: { transaction, user: getUserName() }});
     } catch (e) { 
-      console.error("Buluta kaydederken hata oluştu: ", e); 
-      setAutoToast("HATA: İşlem kaydedilemedi! Lütfen Firebase izinlerini kontrol edin.");
-      setTimeout(() => setAutoToast(null), 4000);
+      setAutoToast("HATA: İşlem kaydedilemedi! Lütfen Firebase izinlerini kontrol edin."); setTimeout(() => setAutoToast(null), 4000);
     }
   };
 
@@ -379,53 +343,34 @@ export default function App() {
     try {
       const batch = writeBatch(db);
       const groupId = `import-${Date.now()}`;
-      
       txsArray.forEach((tx) => {
         const docRef = doc(collection(db, "transactions"));
-        batch.set(docRef, {
-          ...tx, 
-          groupId, 
-          date: tx.date || new Date().toISOString(), 
-          addedBy: getUserName()
-        });
+        batch.set(docRef, { ...tx, groupId, date: tx.date || new Date().toISOString(), addedBy: getUserName() });
       });
-      
       await batch.commit();
       dispatch({ type: 'ADD_BULK_TRANSACTIONS', payload: { transactions: txsArray, user: getUserName() }});
     } catch (e) { 
-      console.error("Toplu işlem kaydedilemedi: ", e); 
-      setAutoToast("HATA: Toplu işlem kaydedilemedi! Firebase izinlerinizi kontrol edin.");
-      setTimeout(() => setAutoToast(null), 4000);
+      setAutoToast("HATA: Toplu işlem kaydedilemedi!"); setTimeout(() => setAutoToast(null), 4000);
     }
   };
 
-  const addBulkDue = async (type, daireAmount, dukkanAmounts, description) => {
+  const addBulkDue = async (type, defaultAmount, customAmounts, description) => {
     try {
       const batch = writeBatch(db);
       const groupId = `bulk-${Date.now()}`;
 
       units.forEach((unit) => {
-        const amount = unit.type === 'daire' ? Number(daireAmount) : Number(dukkanAmounts[unit.id] || 0);
+        // Eğer customAmounts içinde bu birime özel tutar varsa onu kullan, yoksa defaultAmount kullan.
+        const amount = customAmounts[unit.id] !== undefined && customAmounts[unit.id] !== '' ? Number(customAmounts[unit.id]) : Number(defaultAmount);
         if (amount > 0) {
           const docRef = doc(collection(db, "transactions"));
-          batch.set(docRef, {
-            date: new Date().toISOString(), 
-            type, 
-            amount, 
-            unitId: unit.id, 
-            description, 
-            groupId,
-            addedBy: getUserName()
-          });
+          batch.set(docRef, { date: new Date().toISOString(), type, amount, unitId: unit.id, description, groupId, addedBy: getUserName() });
         }
       });
-
       await batch.commit();
       dispatch({ type: 'ADD_BULK_DUE', payload: { type, description, user: getUserName() }});
     } catch (e) { 
-      console.error("Toplu borçlandırma kaydedilemedi: ", e); 
-      setAutoToast("HATA: Toplu borçlandırma kaydedilemedi! Firebase izinlerinizi kontrol edin.");
-      setTimeout(() => setAutoToast(null), 4000);
+      setAutoToast("HATA: Toplu borçlandırma kaydedilemedi!"); setTimeout(() => setAutoToast(null), 4000);
     }
   };
   
@@ -434,10 +379,7 @@ export default function App() {
       await setDoc(doc(db, "units", String(updatedUnit.id)), updatedUnit, { merge: true });
       dispatch({ type: 'UPDATE_UNIT', payload: { updatedUnit, user: getUserName() }});
       return true;
-    } catch (e) { 
-      console.error("Kişi buluta kaydedilemedi:", e); 
-      return false;
-    }
+    } catch (e) { return false; }
   };
 
   const onUpdateBulkUnits = async (updatedUnits) => {
@@ -450,10 +392,7 @@ export default function App() {
       await batch.commit();
       dispatch({ type: 'UPDATE_BULK_UNITS', payload: { updatedUnits, user: getUserName() }});
       return true;
-    } catch (e) { 
-      console.error("Kişiler toplu olarak buluta kaydedilemedi:", e); 
-      return false;
-    }
+    } catch (e) { return false; }
   };
 
   const onEditTransaction = async (id, updatedData) => {
@@ -461,46 +400,37 @@ export default function App() {
       await updateDoc(doc(db, "transactions", id), updatedData);
       dispatch({ type: 'EDIT_TRANSACTION', payload: { id, updatedData, user: getUserName() }});
     } catch (e) { 
-      console.error("Bulutta güncellenirken hata:", e); 
-      setAutoToast("HATA: Güncelleme kaydedilemedi! Firebase izinlerini kontrol edin.");
-      setTimeout(() => setAutoToast(null), 4000);
+      setAutoToast("HATA: Güncelleme kaydedilemedi!"); setTimeout(() => setAutoToast(null), 4000);
     }
   };
 
-  const onUpdateSettings = async (newSettings) => {
+  const onUpdateSettings = async (newSettings, newBuildingConfig) => {
     try {
-      await setDoc(doc(db, "settings", "general"), newSettings, { merge: true });
-      dispatch({ type: 'UPDATE_SETTINGS', payload: { newSettings, user: getUserName() }});
+      const batch = writeBatch(db);
+      if(newSettings) batch.set(doc(db, "settings", "general"), newSettings, { merge: true });
+      if(newBuildingConfig) batch.set(doc(db, "settings", "building"), newBuildingConfig, { merge: true });
+      await batch.commit();
+      if(newSettings) dispatch({ type: 'UPDATE_SETTINGS', payload: { newSettings, user: getUserName() }});
+      if(newBuildingConfig) dispatch({ type: 'SET_BUILDING_CONFIG', payload: { ...buildingConfig, ...newBuildingConfig } });
       return true;
-    } catch (e) { 
-      console.error("Ayarlar buluta kaydedilemedi:", e); 
-      return false;
-    }
+    } catch (e) { return false; }
   };
 
   const [deleteDialog, setDeleteDialog] = useState({ isOpen: false, id: null, isGroup: false });
-  const [adminPassword, setAdminPassword] = useState('');
+  const [adminPasswordInput, setAdminPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState('');
-
-  const deleteTransaction = (id) => { setDeleteDialog({ isOpen: true, id, isGroup: false }); setAdminPassword(''); setPasswordError(''); };
-  const deleteTransactionGroup = (groupId) => { setDeleteDialog({ isOpen: true, id: groupId, isGroup: true }); setAdminPassword(''); setPasswordError(''); };
-  const deleteMultipleTransactions = (ids) => { setDeleteDialog({ isOpen: true, id: ids, isGroup: false }); setAdminPassword(''); setPasswordError(''); };
 
   const executeDelete = async (e) => {
     e.preventDefault();
-    if (adminPassword === "200584") {
+    if (adminPasswordInput === buildingConfig.adminPassword) {
       try {
         if (deleteDialog.isGroup) {
           const q = query(collection(db, "transactions"), where("groupId", "==", deleteDialog.id));
           const snapshot = await getDocs(q);
-          snapshot.forEach(async (docItem) => {
-            await deleteDoc(doc(db, "transactions", docItem.id));
-          });
+          snapshot.forEach(async (docItem) => { await deleteDoc(doc(db, "transactions", docItem.id)); });
           dispatch({ type: 'DELETE_TRANSACTION_GROUP', payload: { groupId: deleteDialog.id, user: getUserName() }});
         } else if (Array.isArray(deleteDialog.id)) {
-          for (const tId of deleteDialog.id) {
-            await deleteDoc(doc(db, "transactions", tId));
-          }
+          for (const tId of deleteDialog.id) { await deleteDoc(doc(db, "transactions", tId)); }
           dispatch({ type: 'DELETE_TRANSACTION_GROUP', payload: { groupId: 'multiple', user: getUserName() }});
         } else {
           const tx = transactions.find(t => t.id === deleteDialog.id);
@@ -509,46 +439,38 @@ export default function App() {
         }
         setDeleteDialog({ isOpen: false, id: null, isGroup: false });
       } catch (error) {
-        console.error("Buluttan silerken hata:", error);
-        setAutoToast("HATA: Silme işlemi yansıtılamadı! Firebase izinlerini kontrol edin.");
-        setTimeout(() => setAutoToast(null), 4000);
+        setAutoToast("HATA: Silme işlemi yansıtılamadı!"); setTimeout(() => setAutoToast(null), 4000);
       }
-      } else setPasswordError("Hatalı şifre! Lütfen tekrar deneyin.");
+    } else setPasswordError("Hatalı şifre! Lütfen tekrar deneyin.");
   };
+
+  if (isCheckingSetup) {
+    return <div className="min-h-screen flex items-center justify-center bg-slate-50"><div className="animate-spin text-blue-600"><Cpu size={48} /></div></div>;
+  }
+
+  if (!buildingConfig || !buildingConfig.isSetupComplete) {
+    return <SetupWizard onComplete={handleSetupComplete} />;
+  }
 
   return (
     <>
       <style dangerouslySetInnerHTML={{__html: `
         @media print {
-          @page { size: A4 portrait; margin: 15mm; } /* Her sayfada üst/alt ve yan boşlukları garanti eder */
+          @page { size: A4 portrait; margin: 15mm; }
           body { -webkit-print-color-adjust: exact; print-color-adjust: exact; background: white; margin: 0; padding: 0; }
           body * { visibility: hidden; }
           .print-target, .print-target * { visibility: visible !important; }
-          .print-target { position: absolute; left: 0; top: 0; width: 100%; height: auto; margin: 0; padding: 0; background: white; } /* Padding kaldırıldı, boşlukları @page yönetecek */
+          .print-target { position: absolute; left: 0; top: 0; width: 100%; height: auto; margin: 0; padding: 0; background: white; }
           .no-print, .no-print * { display: none !important; }
           .print-only { display: block !important; }
-          
-          .print-target table { page-break-inside: auto; font-size: 10pt; width: 100%; min-width: auto !important; }
-          .print-target tr { page-break-inside: avoid; page-break-after: auto; break-inside: avoid; }
+          .print-target table { page-break-inside: auto; font-size: 10pt; width: 100%; }
+          .print-target tr { page-break-inside: avoid; page-break-after: auto; }
           .print-target thead { display: table-header-group; }
           .print-target th, .print-target td { padding: 6px 8px !important; }
-          .print-target h1, .print-target h2, .print-target h3 { page-break-after: avoid; }
-          .print-target .shadow-sm, .print-target .shadow-md, .print-target .shadow-lg { box-shadow: none !important; }
-          .print-target .overflow-x-auto, .print-target .overflow-y-auto { overflow: visible !important; max-height: none !important; }
-          .print-target .text-sm { font-size: 9pt !important; }
-          .print-target .text-xs { font-size: 8pt !important; }
         }
-        @media screen {
-          .print-only { display: none !important; }
-        }
-        input[type=number]::-webkit-inner-spin-button, 
-        input[type=number]::-webkit-outer-spin-button { 
-          -webkit-appearance: none; 
-          margin: 0; 
-        }
-        input[type=number] {
-          -moz-appearance: textfield;
-        }
+        @media screen { .print-only { display: none !important; } }
+        input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+        input[type=number] { -moz-appearance: textfield; }
       `}} />
 
       {autoToast && (
@@ -558,20 +480,22 @@ export default function App() {
         </div>
       )}
 
-      {!currentUser && <LoginScreen onLogin={handleLogin} units={units} />}
+      {!currentUser && <LoginScreen onLogin={handleLogin} units={units} buildingConfig={buildingConfig} />}
       
       {currentUser === 'admin' && (
         <AdminDashboard 
-          units={units} transactions={transactions} sysLogs={sysLogs} computations={computations} lastBilledMonth={lastBilledMonth} settings={settings}
+          buildingConfig={buildingConfig} units={units} transactions={transactions} sysLogs={sysLogs} computations={computations} lastBilledMonth={lastBilledMonth} settings={settings}
           onAddTransaction={addTransaction} onAddBulkTransactions={addBulkTransactions} onAddBulkDue={addBulkDue}
-          onDeleteTransaction={deleteTransaction} onDeleteTransactionGroup={deleteTransactionGroup} onDeleteMultipleTransactions={deleteMultipleTransactions}
+          onDeleteTransaction={(id) => { setDeleteDialog({ isOpen: true, id, isGroup: false }); setAdminPasswordInput(''); setPasswordError(''); }}
+          onDeleteTransactionGroup={(id) => { setDeleteDialog({ isOpen: true, id, isGroup: true }); setAdminPasswordInput(''); setPasswordError(''); }}
+          onDeleteMultipleTransactions={(ids) => { setDeleteDialog({ isOpen: true, id: ids, isGroup: false }); setAdminPasswordInput(''); setPasswordError(''); }}
           onEditTransaction={onEditTransaction} onUpdateUnit={onUpdateUnit} onUpdateBulkUnits={onUpdateBulkUnits} onUpdateSettings={onUpdateSettings} onLogout={handleLogout} 
         />
       )}
 
       {currentUser && currentUser !== 'admin' && (
         <ResidentDashboard 
-          unitData={units.find(u => u.id === currentUser)} transactions={transactions} balanceObj={computations.unitBalances[currentUser]}
+          buildingConfig={buildingConfig} unitData={units.find(u => u.id === currentUser)} transactions={transactions} balanceObj={computations.unitBalances[currentUser]}
           onAddTransaction={addTransaction} onLogout={handleLogout} 
         />
       )}
@@ -581,13 +505,13 @@ export default function App() {
           <div className="bg-white p-6 rounded-2xl shadow-2xl w-full max-w-sm transform transition-all">
             <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-3">
               <h3 className="font-bold text-lg text-slate-800 flex items-center"><Trash2 className="text-red-500 mr-2" size={20}/> İşlemi Geri Al</h3>
-              <button onClick={() => setDeleteDialog({ isOpen: false, id: null, isGroup: false })} className="text-slate-400 hover:text-slate-600 transition-colors">&times;</button>
+              <button onClick={() => setDeleteDialog({ isOpen: false, id: null, isGroup: false })} className="text-slate-400 hover:text-slate-600">&times;</button>
             </div>
-            <p className="text-sm text-slate-600 mb-6">{deleteDialog.isGroup ? "Bu TOPLU işlemi geri almak istediğinize emin misiniz? Gruptaki tüm kayıtlar silinecek ve bakiyeler düzeltilecektir." : Array.isArray(deleteDialog.id) ? `Seçtiğiniz ${deleteDialog.id.length} adet işlemi geri almak istediğinize emin misiniz? Bakiyeler otomatik düzeltilecektir.` : "Bu işlemi geri almak istediğinize emin misiniz? İlgili bakiye otomatik düzeltilecektir."}</p>
+            <p className="text-sm text-slate-600 mb-6">{deleteDialog.isGroup ? "Bu TOPLU işlemi geri almak istediğinize emin misiniz? Gruptaki tüm kayıtlar silinecek ve bakiyeler düzeltilecektir." : "Bu işlemi geri almak istediğinize emin misiniz? Bakiye otomatik düzeltilecektir."}</p>
             <form onSubmit={executeDelete} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Yönetici Şifresi</label>
-                <input type="password" required autoFocus className="w-full border border-slate-300 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-red-500 transition-all" value={adminPassword} onChange={e => { setAdminPassword(e.target.value); setPasswordError(''); }} />
+                <input type="password" required autoFocus className="w-full border border-slate-300 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-red-500" value={adminPasswordInput} onChange={e => { setAdminPasswordInput(e.target.value); setPasswordError(''); }} />
                 {passwordError && <p className="text-red-600 text-sm mt-1 font-medium">{passwordError}</p>}
               </div>
               <div className="flex gap-2 pt-2">
@@ -602,7 +526,118 @@ export default function App() {
   );
 }
 
-function LoginScreen({ onLogin, units }) {
+// ==========================================
+// YENİ: DİNAMİK KURULUM SİHİRBAZI (SaaS Yönü)
+// ==========================================
+function SetupWizard({ onComplete }) {
+  const [step, setStep] = useState(1);
+  const [config, setConfig] = useState({ buildingName: '', adminPassword: '' });
+  const [unitImportText, setUnitImportText] = useState('');
+  const [parsedUnits, setParsedUnits] = useState(null);
+
+  const handleParseUnits = () => {
+    if(!unitImportText.trim()) return;
+    const lines = unitImportText.split('\n');
+    const parsed = [];
+    lines.forEach((line, index) => {
+      if(!line.trim()) return;
+      const cols = line.split(/\t|;/);
+      while(cols.length < 6) cols.push('');
+      
+      let rawName = cols[0].trim();
+      let rawType = cols[1].trim().toLowerCase() === 'dükkan' ? 'dukkan' : 'daire';
+      let rawArsa = parseFloat(cols[2].trim()) || 100;
+      let rawOwnerName = cols[3].trim();
+      let rawPhone = cols[4].trim();
+      let rawPass = cols[5].trim() || '1234';
+
+      let id = rawName.replace(/\s+/g, '-');
+      parsed.push({
+        id, name: rawName, type: rawType, arsaPayi: rawArsa,
+        residentStatus: 'owner', ownerName: rawOwnerName, ownerPhone: rawPhone, 
+        tenantName: '', tenantPhone: '', password: rawPass, isValid: rawName.length > 0
+      });
+    });
+    setParsedUnits(parsed);
+  };
+
+  const handleFinish = () => {
+    const validUnits = parsedUnits.filter(p => p.isValid);
+    if(validUnits.length === 0) return alert("Lütfen en az bir geçerli birim ekleyin.");
+    onComplete({ ...config, isSetupComplete: true }, validUnits);
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4">
+      <div className="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-3xl animate-in fade-in slide-in-from-bottom-10">
+        <div className="flex items-center space-x-3 mb-8 border-b border-slate-100 pb-4">
+          <div className="bg-blue-600 p-3 rounded-xl text-white"><Rocket size={28}/></div>
+          <div><h1 className="text-2xl font-bold text-slate-800">Sistem Kurulum Sihirbazı</h1><p className="text-slate-500">Uygulamanızı sitenize göre yapılandırın</p></div>
+        </div>
+
+        {step === 1 && (
+          <div className="space-y-6">
+            <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
+              <h3 className="font-bold text-blue-800 mb-2">1. Adım: Temel Bilgiler</h3>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Site / Apartman Adı</label>
+                  <input type="text" required placeholder="Örn: Güneş Sitesi" className="w-full border border-slate-300 rounded-lg px-4 py-2" value={config.buildingName} onChange={e => setConfig({...config, buildingName: e.target.value})} />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Yönetici Paneli Şifresi</label>
+                  <input type="text" required placeholder="Sistemi yönetecek kişinin şifresi" className="w-full border border-slate-300 rounded-lg px-4 py-2" value={config.adminPassword} onChange={e => setConfig({...config, adminPassword: e.target.value})} />
+                </div>
+              </div>
+            </div>
+            <button disabled={!config.buildingName || !config.adminPassword} onClick={() => setStep(2)} className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 transition disabled:opacity-50 flex justify-center items-center">Sonraki Adım <ArrowRight className="ml-2" size={20}/></button>
+          </div>
+        )}
+
+        {step === 2 && (
+          <div className="space-y-6">
+            <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100">
+              <h3 className="font-bold text-indigo-800 mb-2">2. Adım: Birimleri (Daire/Dükkan) İçeri Aktar</h3>
+              <p className="text-sm text-indigo-700 mb-4">Excel'den aşağıdaki formata uygun olarak kopyalayıp yapıştırın. (Boş bırakmak istediğiniz yere boşluk veya tire bırakın).</p>
+              <div className="bg-white p-3 rounded border border-indigo-200 text-xs font-mono mb-2">
+                Birim Adı | Tipi (Daire/Dükkan) | Arsa Payı | İsim Soyisim | Telefon | Şifre<br/>
+                Daire 1   | Daire               | 110       | Ahmet Yılmaz | 555     | 1234
+              </div>
+              {!parsedUnits ? (
+                <>
+                  <textarea className="w-full h-40 border border-slate-300 rounded-lg p-3 text-sm font-mono focus:ring-2 focus:ring-indigo-500 whitespace-pre" placeholder="Kopyaladığınız Excel verilerini buraya yapıştırın..." value={unitImportText} onChange={e => setUnitImportText(e.target.value)}></textarea>
+                  <div className="flex gap-2 mt-4">
+                    <button onClick={() => setStep(1)} className="bg-slate-200 text-slate-700 px-6 py-2 rounded-lg font-bold">Geri</button>
+                    <button onClick={handleParseUnits} className="flex-1 bg-indigo-600 text-white px-6 py-2 rounded-lg font-bold">Önizle ve Kontrol Et</button>
+                  </div>
+                </>
+              ) : (
+                <div className="space-y-4">
+                  <div className="max-h-60 overflow-y-auto border border-slate-300 rounded bg-white">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-100"><tr className="border-b"><th className="p-2">Birim</th><th className="p-2">Tip</th><th className="p-2">Arsa Payı</th><th className="p-2">Malik</th></tr></thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {parsedUnits.map((u,i) => (
+                          <tr key={i}><td className="p-2 font-bold">{u.name}</td><td className="p-2">{u.type}</td><td className="p-2">{u.arsaPayi}</td><td className="p-2">{u.ownerName}</td></tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={() => setParsedUnits(null)} className="bg-slate-200 text-slate-700 px-6 py-3 rounded-xl font-bold">Düzenle</button>
+                    <button onClick={handleFinish} className="flex-1 bg-emerald-600 text-white py-3 rounded-xl font-bold shadow-lg flex items-center justify-center">Kurulumu Tamamla ve Başla <CheckCircle className="ml-2"/></button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LoginScreen({ onLogin, units, buildingConfig }) {
   const [selectedRole, setSelectedRole] = useState('admin');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -612,7 +647,7 @@ function LoginScreen({ onLogin, units }) {
     setError('');
 
     if (selectedRole === 'admin') {
-      if (password === '200584') {
+      if (password === buildingConfig.adminPassword) {
         onLogin('admin');
       } else {
         setError('Hatalı yönetici şifresi!');
@@ -631,7 +666,7 @@ function LoginScreen({ onLogin, units }) {
     <div className="min-h-screen bg-slate-100 flex flex-col items-center justify-center p-4">
       <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md">
         <div className="flex justify-center mb-6 text-blue-600"><Building size={48} /></div>
-        <h1 className="text-2xl font-bold text-center text-slate-800 mb-2">Yükseller Apartmanı</h1>
+        <h1 className="text-2xl font-bold text-center text-slate-800 mb-2">{buildingConfig.buildingName}</h1>
         <p className="text-slate-500 text-center mb-8">Lütfen giriş yapmak istediğiniz rolü ve şifrenizi girin.</p>
         
         <form onSubmit={handleLoginSubmit} className="space-y-4">
@@ -639,8 +674,8 @@ function LoginScreen({ onLogin, units }) {
             <label className="block text-sm font-medium text-slate-700 mb-1">Giriş Türü / Birim</label>
             <select className="w-full border border-slate-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none bg-white" value={selectedRole} onChange={(e) => { setSelectedRole(e.target.value); setError(''); setPassword(''); }}>
               <option value="admin">👨‍💼 Yönetici Girişi</option>
-              <optgroup label="Daireler">{units.filter(u => u.type === 'daire').map(u => <option key={u.id} value={u.id}>🏠 {u.name}</option>)}</optgroup>
-              <optgroup label="Dükkanlar">{units.filter(u => u.type === 'dukkan').map(u => <option key={u.id} value={u.id}>🏪 {u.name}</option>)}</optgroup>
+              {units.some(u => u.type === 'daire') && <optgroup label="Daireler">{units.filter(u => u.type === 'daire').map(u => <option key={u.id} value={u.id}>🏠 {u.name}</option>)}</optgroup>}
+              {units.some(u => u.type === 'dukkan') && <optgroup label="Dükkan / Ticari">{units.filter(u => u.type === 'dukkan').map(u => <option key={u.id} value={u.id}>🏪 {u.name}</option>)}</optgroup>}
             </select>
           </div>
           <div>
@@ -653,17 +688,15 @@ function LoginScreen({ onLogin, units }) {
           </div>
           <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition-colors mt-2 shadow-md">Sisteme Giriş Yap</button>
         </form>
-
       </div>
-      
       <p className="mt-6 text-[9px] text-slate-400 font-medium uppercase tracking-widest opacity-50">
-        v2.0 • Ukurtcu Management System
+        v3.0 • Dynamic Management System
       </p>
     </div>
   );
 }
 
-function AdminDashboard({ units, transactions, sysLogs, computations, lastBilledMonth, settings, onAddTransaction, onAddBulkTransactions, onAddBulkDue, onDeleteTransaction, onDeleteTransactionGroup, onDeleteMultipleTransactions, onEditTransaction, onUpdateUnit, onUpdateBulkUnits, onUpdateSettings, onLogout }) {
+function AdminDashboard({ buildingConfig, units, transactions, sysLogs, computations, lastBilledMonth, settings, onAddTransaction, onAddBulkTransactions, onAddBulkDue, onDeleteTransaction, onDeleteTransactionGroup, onDeleteMultipleTransactions, onEditTransaction, onUpdateUnit, onUpdateBulkUnits, onUpdateSettings, onLogout }) {
   const [activeTab, setActiveTab] = useState('overview'); 
   const { totalKasa, totalGider, totalBekleyenAidat, totalBekleyenDemirbas, totalBekleyenEkstra, totalBekleyenOzel, totalBekleyenFaiz, unitBalances } = computations;
 
@@ -673,7 +706,7 @@ function AdminDashboard({ units, transactions, sysLogs, computations, lastBilled
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
           <div className="flex items-center space-x-2">
             <Building className="text-blue-400" />
-            <span className="font-bold text-lg hidden sm:block">Yükseller Apartmanı Yönetici Paneli</span>
+            <span className="font-bold text-lg hidden sm:block">{buildingConfig.buildingName} Paneli</span>
             <span className="font-bold text-lg sm:hidden">Yönetici Paneli</span>
           </div>
           <div className="flex items-center space-x-4">
@@ -697,13 +730,13 @@ function AdminDashboard({ units, transactions, sysLogs, computations, lastBilled
         </div>
 
         <div className="flex-1">
-          {activeTab === 'overview' && <AdminOverview computations={computations} allTransactions={transactions} units={units} />}
-          {activeTab === 'units' && <AdminUnits units={units} unitBalances={unitBalances} lastBilledMonth={lastBilledMonth} transactions={transactions} onAddTransaction={onAddTransaction} onAddBulkTransactions={onAddBulkTransactions} onAddBulkDue={onAddBulkDue} onDeleteTransaction={onDeleteTransaction} onEditTransaction={onEditTransaction} onUpdateUnit={onUpdateUnit} onUpdateBulkUnits={onUpdateBulkUnits} />}
-          {activeTab === 'expenses' && <AdminExpenses transactions={transactions} onAddTransaction={onAddTransaction} onAddBulkTransactions={onAddBulkTransactions} />}
-          {activeTab === 'report' && <AdminReport computations={computations} transactions={transactions} />}
-          {activeTab === 'assembly' && <AdminAssembly units={units} computations={computations} transactions={transactions} settings={settings} />}
-          {activeTab === 'history' && <AdminHistoryTabs transactions={transactions} sysLogs={sysLogs} onDeleteTransaction={onDeleteTransaction} onDeleteTransactionGroup={onDeleteTransactionGroup} onDeleteMultipleTransactions={onDeleteMultipleTransactions} />}
-          {activeTab === 'settings' && <AdminSettings settings={settings} onUpdateSettings={onUpdateSettings} />}
+          {activeTab === 'overview' && <AdminOverview buildingConfig={buildingConfig} computations={computations} allTransactions={transactions} units={units} />}
+          {activeTab === 'units' && <AdminUnits buildingConfig={buildingConfig} units={units} unitBalances={unitBalances} lastBilledMonth={lastBilledMonth} transactions={transactions} onAddTransaction={onAddTransaction} onAddBulkTransactions={onAddBulkTransactions} onAddBulkDue={onAddBulkDue} onDeleteTransaction={onDeleteTransaction} onEditTransaction={onEditTransaction} onUpdateUnit={onUpdateUnit} onUpdateBulkUnits={onUpdateBulkUnits} />}
+          {activeTab === 'expenses' && <AdminExpenses buildingConfig={buildingConfig} transactions={transactions} onAddTransaction={onAddTransaction} onAddBulkTransactions={onAddBulkTransactions} />}
+          {activeTab === 'report' && <AdminReport buildingConfig={buildingConfig} computations={computations} transactions={transactions} />}
+          {activeTab === 'assembly' && <AdminAssembly buildingConfig={buildingConfig} units={units} computations={computations} transactions={transactions} settings={settings} />}
+          {activeTab === 'history' && <AdminHistoryTabs buildingConfig={buildingConfig} transactions={transactions} sysLogs={sysLogs} onDeleteTransaction={onDeleteTransaction} onDeleteTransactionGroup={onDeleteTransactionGroup} onDeleteMultipleTransactions={onDeleteMultipleTransactions} />}
+          {activeTab === 'settings' && <AdminSettings buildingConfig={buildingConfig} settings={settings} onUpdateSettings={onUpdateSettings} />}
         </div>
       </div>
     </div>
@@ -718,18 +751,21 @@ function NavButton({ active, onClick, icon, text }) {
   );
 }
 
-function AdminSettings({ settings, onUpdateSettings }) {
+function AdminSettings({ buildingConfig, settings, onUpdateSettings }) {
   const [formData, setFormData] = useState(settings);
+  const [bConfig, setBConfig] = useState(buildingConfig);
   const [sysMessage, setSysMessage] = useState(null);
 
   const handleChange = (e) => {
     const val = e.target.value;
     setFormData({ ...formData, [e.target.name]: val === '' ? '' : Number(val) });
   };
+  
+  const handleBChange = (e) => setBConfig({ ...bConfig, [e.target.name]: e.target.value });
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    const success = await onUpdateSettings(formData);
+    const success = await onUpdateSettings(formData, bConfig);
     if (success) {
       setSysMessage({ text: 'Sistem parametreleri başarıyla güncellendi.', type: 'success' });
     } else {
@@ -747,13 +783,24 @@ function AdminSettings({ settings, onUpdateSettings }) {
       )}
 
       <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-        <h2 className="text-xl font-bold text-slate-800 mb-2 flex items-center"><Settings className="mr-2 text-slate-500" /> Bütçe ve Maaş Parametreleri</h2>
-        <p className="text-slate-500 text-sm mb-6 border-b border-slate-100 pb-4">Burada belirlediğiniz güncel oranlar, Genel Kurul sekmesindeki "Akıllı Bütçe Planlayıcı" tarafından baz alınacak ve tüm hesaplamalarda (personel maaşı, SGK maliyeti vs.) otomatik olarak kullanılacaktır.</p>
+        <h2 className="text-xl font-bold text-slate-800 mb-6 flex items-center"><Settings className="mr-2 text-slate-500" /> Sistem ve Bütçe Ayarları</h2>
         
         <form onSubmit={handleSubmit} className="space-y-6 max-w-2xl">
+          
+          <div className="bg-slate-50 p-5 rounded-lg border border-slate-200 space-y-4">
+            <h3 className="font-bold text-slate-800 flex items-center mb-2"><Building className="mr-2" size={18}/> Site Temel Bilgileri</h3>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Site / Apartman Adı</label>
+              <input type="text" name="buildingName" value={bConfig.buildingName} onChange={handleBChange} required className="w-full border border-slate-300 rounded-lg px-4 py-2 bg-white focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Yönetici Şifresi</label>
+              <input type="text" name="adminPassword" value={bConfig.adminPassword} onChange={handleBChange} required className="w-full border border-slate-300 rounded-lg px-4 py-2 bg-white focus:ring-2 focus:ring-blue-500" />
+            </div>
+          </div>
+
           <div className="bg-blue-50 p-5 rounded-lg border border-blue-100 space-y-4">
             <h3 className="font-bold text-blue-800 flex items-center mb-2"><User className="mr-2" size={18}/> Personel ve Maaş Ayarları</h3>
-            
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Tahmini Brüt Asgari Ücret (Aylık TL)</label>
               <input type="number" name="grossMinimumWage" value={formData.grossMinimumWage} onChange={handleChange} required className="w-full border border-slate-300 rounded-lg px-4 py-2 bg-white focus:ring-2 focus:ring-blue-500 outline-none" />
@@ -767,7 +814,6 @@ function AdminSettings({ settings, onUpdateSettings }) {
                   <input type="number" step="0.01" name="sgkEmployerRate" value={formData.sgkEmployerRate} onChange={handleChange} required className="w-full border border-slate-300 rounded-lg pl-4 pr-8 py-2 bg-white focus:ring-2 focus:ring-blue-500 outline-none" />
                   <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold">%</span>
                 </div>
-                <p className="text-xs text-slate-500 mt-1">SGK primi işveren payı %21.75'tir. Düzenli ödeme indirimi ile 5 puan inerek <strong>%16.75</strong> olarak uygulanabilir.</p>
               </div>
               
               <div>
@@ -776,7 +822,6 @@ function AdminSettings({ settings, onUpdateSettings }) {
                   <input type="number" step="0.1" name="unemploymentRate" value={formData.unemploymentRate} onChange={handleChange} required className="w-full border border-slate-300 rounded-lg pl-4 pr-8 py-2 bg-white focus:ring-2 focus:ring-blue-500 outline-none" />
                   <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold">%</span>
                 </div>
-                <p className="text-xs text-slate-500 mt-1">Örn: 2.0</p>
               </div>
             </div>
           </div>
@@ -789,7 +834,6 @@ function AdminSettings({ settings, onUpdateSettings }) {
                 <input type="number" step="0.1" name="defaultInflationRate" value={formData.defaultInflationRate} onChange={handleChange} required className="w-full border border-slate-300 rounded-lg pl-4 pr-8 py-2 bg-white focus:ring-2 focus:ring-amber-500 outline-none" />
                 <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold">%</span>
               </div>
-              <p className="text-xs text-slate-500 mt-1">Geçmiş faturalara (Elektrik, Su vs.) gelecek yıl için yansıtılacak tahmini zam oranı.</p>
             </div>
           </div>
 
@@ -802,7 +846,7 @@ function AdminSettings({ settings, onUpdateSettings }) {
   );
 }
 
-function AdminOverview({ computations, allTransactions, units }) {
+function AdminOverview({ buildingConfig, computations, allTransactions, units }) {
   const { totalKasa, totalGider, totalBekleyenAidat, totalBekleyenDemirbas, totalBekleyenEkstra, totalBekleyenOzel, totalBekleyenFaiz, unitBalances } = computations;
   const totalBekleyenTumu = totalBekleyenAidat + totalBekleyenDemirbas + totalBekleyenEkstra + totalBekleyenOzel + totalBekleyenFaiz;
 
@@ -849,7 +893,7 @@ function AdminOverview({ computations, allTransactions, units }) {
           <div className="flex justify-between items-center mb-6 border-b-2 border-slate-800 pb-4">
             <div>
               <h2 className="text-2xl font-bold uppercase tracking-wide text-slate-800">Genel Durum ve Finansal Analiz Raporu</h2>
-              <p className="text-slate-600 mt-1">Yükseller Apartmanı • Rapor Tarihi: {new Date().toLocaleDateString('tr-TR')} {new Date().toLocaleTimeString('tr-TR')}</p>
+              <p className="text-slate-600 mt-1">{buildingConfig.buildingName} • Rapor Tarihi: {new Date().toLocaleDateString('tr-TR')} {new Date().toLocaleTimeString('tr-TR')}</p>
             </div>
             <button onClick={() => handlePrint('overview-print', 'Genel_Durum_Raporu')} className="no-print bg-slate-800 text-white px-5 py-2.5 rounded-lg flex items-center hover:bg-slate-900 font-bold transition-colors shadow-sm"><Printer size={18} className="mr-2"/> PDF İndir / Yazdır</button>
           </div>
@@ -992,11 +1036,11 @@ function StatCard({ title, amount, type, icon }) {
   );
 }
 
-function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddTransaction, onAddBulkTransactions, onAddBulkDue, onDeleteTransaction, onEditTransaction, onUpdateUnit, onUpdateBulkUnits }) {
+function AdminUnits({ buildingConfig, units, unitBalances, lastBilledMonth, transactions, onAddTransaction, onAddBulkTransactions, onAddBulkDue, onDeleteTransaction, onEditTransaction, onUpdateUnit, onUpdateBulkUnits }) {
   const [showBulkModal, setShowBulkModal] = useState(false);
   const [bulkType, setBulkType] = useState('due'); 
   const [daireAmount, setDaireAmount] = useState('');
-  const [dukkanAmounts, setDukkanAmounts] = useState({});
+  const [customAmounts, setCustomAmounts] = useState({});
   const [bulkDesc, setBulkDesc] = useState('');
 
   const [sysMessage, setSysMessage] = useState(null);
@@ -1056,8 +1100,8 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
   const handleBulkSubmit = (e) => {
     e.preventDefault();
     if(daireAmount && bulkDesc) {
-      onAddBulkDue(bulkType, daireAmount, dukkanAmounts, bulkDesc);
-      setShowBulkModal(false); setBulkType('due'); setDaireAmount(''); setDukkanAmounts({}); setBulkDesc('');
+      onAddBulkDue(bulkType, daireAmount, customAmounts, bulkDesc);
+      setShowBulkModal(false); setBulkType('due'); setDaireAmount(''); setCustomAmounts({}); setBulkDesc('');
       showMessage("Tüm birimlere borçlandırma başarıyla eklendi.");
     }
   };
@@ -1155,9 +1199,19 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
       const matchedUnit = units.find(u => u.name.toLowerCase() === rawUnit.toLowerCase() || u.id.toLowerCase() === rawUnit.toLowerCase().replace(' ', '-') || u.name.toLowerCase().replace(' ', '') === rawUnit.toLowerCase().replace(' ', ''));
       let residentStatus = rawTenantName.length > 0 ? 'tenant' : 'owner';
       
-      parsed.push({ 
-        id: index, rawUnit, unitId: matchedUnit ? matchedUnit.id : null, unitName: matchedUnit ? matchedUnit.name : 'Bilinmiyor', residentStatus, ownerName: rawOwnerName, ownerPhone: rawOwnerPhone, tenantName: rawTenantName, tenantPhone: rawTenantPhone, password: rawPass || '1234', isValid: !!matchedUnit && (rawOwnerName.length > 0 || rawTenantName.length > 0)
-      });
+      if (matchedUnit) {
+        parsed.push({ 
+          id: index, rawUnit, unitId: matchedUnit.id, unitName: matchedUnit.name, residentStatus, ownerName: rawOwnerName, ownerPhone: rawOwnerPhone, tenantName: rawTenantName, tenantPhone: rawTenantPhone, password: rawPass || '1234', isValid: true
+        });
+      } else {
+        // Yeni birim ekleme desteği eklendi
+        let rawType = rawUnit.toLowerCase().includes('dükkan') ? 'dukkan' : 'daire';
+        let id = rawUnit.replace(/\s+/g, '-');
+        parsed.push({
+          id: index, rawUnit, unitId: id, unitName: rawUnit, type: rawType, arsaPayi: 100, // Varsayılan arsa payı
+          residentStatus, ownerName: rawOwnerName, ownerPhone: rawOwnerPhone, tenantName: rawTenantName, tenantPhone: rawTenantPhone, password: rawPass || '1234', isValid: rawUnit.length > 0
+        });
+      }
     });
     setUnitImportPreview(parsed);
   };
@@ -1165,15 +1219,17 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
   const handleUnitImportSubmit = async () => {
     const validUnits = unitImportPreview.filter(p => p.isValid).map(p => {
       const existingUnit = units.find(u => u.id === p.unitId);
-      return { 
-        ...existingUnit, residentStatus: p.residentStatus, ownerName: p.ownerName, ownerPhone: p.ownerPhone, tenantName: p.tenantName, tenantPhone: p.tenantPhone, password: p.password 
-      };
+      if (existingUnit) {
+        return { ...existingUnit, residentStatus: p.residentStatus, ownerName: p.ownerName, ownerPhone: p.ownerPhone, tenantName: p.tenantName, tenantPhone: p.tenantPhone, password: p.password };
+      } else {
+        return { id: p.unitId, name: p.unitName, type: p.type, arsaPayi: p.arsaPayi, residentStatus: p.residentStatus, ownerName: p.ownerName, ownerPhone: p.ownerPhone, tenantName: p.tenantName, tenantPhone: p.tenantPhone, password: p.password };
+      }
     });
 
     if(validUnits.length > 0) {
       const success = await onUpdateBulkUnits(validUnits); 
       if(success) {
-        showMessage(`${validUnits.length} adet birimin bilgileri başarıyla güncellendi.`);
+        showMessage(`${validUnits.length} adet birimin bilgileri başarıyla kaydedildi/güncellendi.`);
         setShowUnitImportModal(false); setUnitImportText(''); setUnitImportPreview(null);
       } else {
         showMessage("Firebase izin hatası! Kaydedilemedi.", "error");
@@ -1195,7 +1251,7 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
           <p className="text-sm text-slate-500 mt-1">Sistemdeki son borçlandırma: <strong className="text-slate-700">{lastBilledMonth}</strong></p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button onClick={() => setShowUnitImportModal(true)} className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-4 py-2 rounded-lg flex items-center shadow-sm transition-colors font-medium border border-indigo-200"><Users size={18} className="mr-2" /> Kişileri Yükle</button>
+          <button onClick={() => setShowUnitImportModal(true)} className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-4 py-2 rounded-lg flex items-center shadow-sm transition-colors font-medium border border-indigo-200"><Users size={18} className="mr-2" /> Kişi/Birim Yükle</button>
           <button onClick={() => setShowImportModal(true)} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2 rounded-lg flex items-center shadow-sm transition-colors font-medium border border-emerald-200"><Upload size={18} className="mr-2" /> Toplu Tahsilat</button>
           <button onClick={() => setShowBulkModal(true)} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center shadow-sm transition-colors"><Plus size={18} className="mr-2" /> Toplu Borç Ekle</button>
         </div>
@@ -1283,7 +1339,7 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
                 <ol className="list-decimal pl-4 space-y-1">
                   <li>Excel dosyanızda şu 6 sütunu yan yana getirin: <strong>Birim Adı</strong> | <strong>Malik Adı</strong> | <strong>Malik Tel</strong> | <strong>Kiracı Adı</strong> | <strong>Kiracı Tel</strong> | <strong>Şifre</strong></li>
                   <li>Örnek Format: <code className="bg-white px-2 py-0.5 rounded text-slate-700">Daire 1   Ahmet Yılmaz   0532111   Ayşe Demir   0555222   1234</code></li>
-                  <li>Eğer dairede kiracı yoksa (mülk sahibi oturuyorsa), kiracı alanlarını boş bırakın. Sistem otomatik olarak "Mal Sahibi" şeklinde kaydedecektir.</li>
+                  <li>Yeni birim ekliyorsanız ve sistemde yoksa, otomatik olarak listeye yeni birim olarak dahil edilecektir.</li>
                   <li>İlgili hücreleri farenizle seçip Kopyalayın (Ctrl+C). Aşağıdaki kutuya Yapıştırın (Ctrl+V) ve Kontrol Et butonuna basın.</li>
                 </ol>
               </div>
@@ -1303,7 +1359,7 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
                   <tbody>
                     {unitImportPreview.map((row) => (
                       <tr key={row.id} className="border-b last:border-0 hover:bg-slate-50">
-                        <td className="p-2"><span className="text-xs text-slate-400 block">{row.rawUnit}</span><span className={row.unitId ? 'font-medium text-slate-800' : 'font-medium text-red-500'}>{row.unitName}</span></td>
+                        <td className="p-2"><span className="text-xs text-slate-400 block">{row.rawUnit}</span><span className={row.unitId ? 'font-medium text-slate-800' : 'font-medium text-red-500'}>{row.unitName} {row.arsaPayi && <span className="text-indigo-500 ml-1">({row.arsaPayi} Pay)</span>}</span></td>
                         <td className="p-2"><span className={`px-2 py-0.5 rounded text-[11px] font-bold ${row.residentStatus === 'tenant' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>{row.residentStatus === 'tenant' ? 'Kiracı Oturuyor' : 'Mal Sahibi'}</span></td>
                         <td className="p-2"><div className="font-medium text-slate-800">{row.ownerName || '-'}</div><div className="text-xs text-slate-500">{row.ownerPhone}</div></td>
                         <td className="p-2"><div className="font-medium text-slate-800">{row.tenantName || <span className="text-slate-400 italic">Yok</span>}</div><div className="text-xs text-slate-500">{row.tenantPhone}</div></td>
@@ -1338,20 +1394,25 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
             </div>
             <input type="text" required placeholder="Açıklama / Ay (Örn: Kasım Aidatı, Çatı Onarımı)" className="w-full border border-slate-300 rounded-lg px-4 py-2" value={bulkDesc} onChange={e => setBulkDesc(e.target.value)} />
             <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
-              <h4 className="font-semibold text-slate-700 mb-3 flex items-center"><Home size={16} className="mr-2"/> Daireler (Toplu Tutar)</h4>
-              <input type="number" required placeholder="Tüm daireler için tutar (TL)" className="w-full sm:w-64 border border-slate-300 rounded-lg px-4 py-2" value={daireAmount} onChange={e => setDaireAmount(e.target.value)} />
+              <h4 className="font-semibold text-slate-700 mb-3 flex items-center"><Home size={16} className="mr-2"/> Varsayılan Tutar (Tüm Birimler İçin)</h4>
+              <input type="number" required placeholder="Genel tutar (TL)" className="w-full sm:w-64 border border-slate-300 rounded-lg px-4 py-2" value={daireAmount} onChange={e => setDaireAmount(e.target.value)} />
+              <p className="text-xs text-slate-500 mt-2">Bu tutar tüm birimlere yansıtılır. Ancak aşağıdan özel olarak farklı tutar girdiğiniz birimlere aşağıdaki tutarlar yansır.</p>
             </div>
-            <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
-              <h4 className="font-semibold text-slate-700 mb-3 flex items-center"><Store size={16} className="mr-2"/> Dükkanlar (Ayrı Tutarlar)</h4>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {units.filter(u => u.type === 'dukkan').map(dukkan => (
-                  <div key={dukkan.id} className="flex items-center space-x-2 bg-white p-2 rounded-lg border border-slate-100">
-                    <label className="text-sm font-medium text-slate-600 w-20">{dukkan.name}</label>
-                    <input type="number" required placeholder="Tutar" className="flex-1 border border-slate-300 rounded-lg px-3 py-1.5 text-sm" value={dukkanAmounts[dukkan.id] || ''} onChange={e => setDukkanAmounts({...dukkanAmounts, [dukkan.id]: e.target.value})} />
-                  </div>
-                ))}
+            
+            {units.length > 0 && (
+              <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 max-h-60 overflow-y-auto">
+                <h4 className="font-semibold text-slate-700 mb-3 flex items-center"><Store size={16} className="mr-2"/> İstisnai Tutarlar (Birim Bazlı Opsiyonel)</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {units.map(u => (
+                    <div key={u.id} className="flex items-center space-x-2 bg-white p-2 rounded-lg border border-slate-100">
+                      <label className="text-xs font-medium text-slate-600 w-24 truncate" title={u.name}>{u.name}</label>
+                      <input type="number" placeholder="Varsayılanı Ez" className="flex-1 border border-slate-300 rounded-lg px-2 py-1.5 text-sm" value={customAmounts[u.id] || ''} onChange={e => setCustomAmounts({...customAmounts, [u.id]: e.target.value})} />
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
+            
             <div className="flex gap-2 pt-2">
               <button type="submit" className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 font-medium">Borçlandır</button>
               <button type="button" onClick={() => setShowBulkModal(false)} className="bg-slate-200 text-slate-700 px-4 py-2 rounded-lg">İptal</button>
@@ -1361,8 +1422,8 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
       )}
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-x-auto" id="units-print-table">
-        <div className="print-only mb-6 text-center border-b-2 border-slate-800 pb-4">
-          <h2 className="text-2xl font-bold uppercase tracking-wide">Yükseller Apartmanı - Daire ve Dükkan Listesi</h2>
+        <div className="print-only mb-6 text-center border-b-2 border-slate-800 pb-4 mt-4">
+          <h2 className="text-2xl font-bold uppercase tracking-wide">{buildingConfig.buildingName} - Birim Listesi</h2>
           <p className="text-slate-600">Filtre: {filterStatus === 'debt' ? 'Borçlular' : filterStatus === 'nodebt' ? 'Borcu Olmayanlar' : 'Tümü'} | Tarih: {new Date().toLocaleDateString('tr-TR')}</p>
         </div>
 
@@ -1373,7 +1434,7 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {filteredUnits.length === 0 ? <tr><td colSpan="5" className="p-6 text-center text-slate-500">Kriterlere uygun kayıt bulunamadı.</td></tr> : null}
+            {filteredUnits.length === 0 ? <tr><td colSpan="5" className="p-6 text-center text-slate-500">Birim bulunamadı veya eklenmedi. Sisteme "Kişi/Birim Yükle" diyerek başlayın.</td></tr> : null}
             {filteredUnits.map(unit => {
               const details = unitBalances[unit.id] || { balance: 0, dueBalance: 0, penaltyBalance: 0 };
               const isTenant = unit.residentStatus === 'tenant';
@@ -1383,7 +1444,10 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
               return (
                 <React.Fragment key={unit.id}>
                   <tr className={`hover:bg-slate-50 transition-colors ${isActionActive ? 'bg-blue-50/40' : ''}`}>
-                    <td className="p-4"><div className="font-medium text-slate-800 flex items-center">{unit.type === 'daire' ? <Home size={16} className="text-slate-400 mr-2"/> : <Store size={16} className="text-slate-400 mr-2"/>}{unit.name}</div></td>
+                    <td className="p-4">
+                      <div className="font-medium text-slate-800 flex items-center">{unit.type === 'daire' ? <Home size={16} className="text-slate-400 mr-2"/> : <Store size={16} className="text-slate-400 mr-2"/>}{unit.name}</div>
+                      <div className="text-[10px] text-slate-400 mt-0.5">Arsa Payı: {unit.arsaPayi}</div>
+                    </td>
                     <td className="p-4">
                       <div className="font-medium text-slate-700">{residentName}</div>
                       <div className="flex items-center mt-1"><span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${isTenant ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>{isTenant ? 'Kiracı Oturuyor' : 'Mal Sahibi'}</span></div>
@@ -1433,11 +1497,26 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
                             <div className="pr-12">
                               <h3 className="font-bold text-lg mb-4 text-blue-800">{unit.name} Düzenle</h3>
                               <form onSubmit={handleEditSubmit} className="space-y-4">
-                                <div>
-                                  <label className="block text-sm font-medium text-slate-700 mb-2">Mülkte Kim Oturuyor?</label>
-                                  <div className="flex space-x-6">
-                                    <label className="flex items-center space-x-2 cursor-pointer bg-slate-50 px-4 py-2 rounded-lg border border-slate-200"><input type="radio" name="rs" value="owner" checked={editFormData.residentStatus === 'owner'} onChange={(e) => setEditFormData({...editFormData, residentStatus: e.target.value})} className="text-blue-600 focus:ring-blue-500 w-4 h-4" /><span className="font-medium text-slate-700">Mal Sahibi</span></label>
-                                    <label className="flex items-center space-x-2 cursor-pointer bg-slate-50 px-4 py-2 rounded-lg border border-slate-200"><input type="radio" name="rs" value="tenant" checked={editFormData.residentStatus === 'tenant'} onChange={(e) => setEditFormData({...editFormData, residentStatus: e.target.value})} className="text-blue-600 focus:ring-blue-500 w-4 h-4" /><span className="font-medium text-slate-700">Kiracı</span></label>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  <div className="space-y-4">
+                                    <div className="bg-slate-50 p-3 rounded border border-slate-200">
+                                      <label className="block text-xs font-medium text-slate-500 mb-1">Arsa Payı (Bütçe Oranı)</label>
+                                      <input type="number" value={editFormData.arsaPayi || 0} onChange={(e) => setEditFormData({...editFormData, arsaPayi: e.target.value})} className="border border-slate-300 rounded-lg px-3 py-1.5 w-full bg-white" />
+                                    </div>
+                                    <div>
+                                      <label className="block text-sm font-medium text-slate-700 mb-2">Mülkte Kim Oturuyor?</label>
+                                      <div className="flex space-x-6">
+                                        <label className="flex items-center space-x-2 cursor-pointer bg-slate-50 px-4 py-2 rounded-lg border border-slate-200"><input type="radio" name="rs" value="owner" checked={editFormData.residentStatus === 'owner'} onChange={(e) => setEditFormData({...editFormData, residentStatus: e.target.value})} className="text-blue-600 focus:ring-blue-500 w-4 h-4" /><span className="font-medium text-slate-700">Mal Sahibi</span></label>
+                                        <label className="flex items-center space-x-2 cursor-pointer bg-slate-50 px-4 py-2 rounded-lg border border-slate-200"><input type="radio" name="rs" value="tenant" checked={editFormData.residentStatus === 'tenant'} onChange={(e) => setEditFormData({...editFormData, residentStatus: e.target.value})} className="text-blue-600 focus:ring-blue-500 w-4 h-4" /><span className="font-medium text-slate-700">Kiracı</span></label>
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className="bg-amber-50 p-4 rounded-lg space-y-3 border border-amber-200">
+                                    <h4 className="font-semibold text-amber-800 flex items-center"><Lock size={16} className="mr-2"/> Sistem Giriş Şifresi</h4>
+                                    <div className="flex items-center space-x-4">
+                                      <span className="text-sm text-slate-600">Bu birimin şifresi:</span>
+                                      <input type="text" required value={editFormData.password || ''} onChange={(e) => setEditFormData({...editFormData, password: e.target.value})} className="border border-slate-300 rounded-lg px-3 py-1.5 w-full max-w-[200px] bg-white font-mono" />
+                                    </div>
                                   </div>
                                 </div>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1450,13 +1529,6 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
                                     <h4 className="font-semibold text-blue-800">Kiracı Bilgileri</h4>
                                     <input type="text" placeholder="Ad Soyad" value={editFormData.tenantName || ''} onChange={(e) => setEditFormData({...editFormData, tenantName: e.target.value})} className="border border-blue-300 rounded-lg px-3 py-2 w-full bg-white" />
                                     <input type="text" placeholder="Telefon" value={editFormData.tenantPhone || ''} onChange={(e) => setEditFormData({...editFormData, tenantPhone: e.target.value})} className="border border-blue-300 rounded-lg px-3 py-2 w-full bg-white" />
-                                  </div>
-                                  <div className="bg-amber-50 p-4 rounded-lg space-y-3 border border-amber-200 md:col-span-2">
-                                    <h4 className="font-semibold text-amber-800 flex items-center"><Lock size={16} className="mr-2"/> Sistem Giriş Şifresi</h4>
-                                    <div className="flex items-center space-x-4">
-                                      <span className="text-sm text-slate-600">Bu birimin şifresi:</span>
-                                      <input type="text" required value={editFormData.password || ''} onChange={(e) => setEditFormData({...editFormData, password: e.target.value})} className="border border-slate-300 rounded-lg px-3 py-1.5 w-48 bg-white font-mono" />
-                                    </div>
                                   </div>
                                 </div>
                                 <div className="flex gap-2 pt-2 border-t border-slate-100">
@@ -1554,7 +1626,7 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
   );
 }
 
-function AdminExpenses({ transactions, onAddTransaction, onAddBulkTransactions }) {
+function AdminExpenses({ buildingConfig, transactions, onAddTransaction, onAddBulkTransactions }) {
   const [isIncome, setIsIncome] = useState(false);
   const [amount, setAmount] = useState('');
   const [desc, setDesc] = useState('');
@@ -1749,7 +1821,7 @@ function AdminExpenses({ transactions, onAddTransaction, onAddBulkTransactions }
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden" id="expenses-print-table">
         <div className="print-only mb-6 text-center border-b-2 border-slate-800 pb-4 mt-4">
-          <h2 className="text-2xl font-bold uppercase">Yükseller Apartmanı - Finans Tablosu</h2>
+          <h2 className="text-2xl font-bold uppercase">{buildingConfig.buildingName} - Finans Tablosu</h2>
           <p className="text-slate-600">Kategori: {filterCat === 'all' ? 'Tümü' : filterCat} | Tarih Aralığı: {startDate ? new Date(startDate).toLocaleDateString('tr-TR') : 'Başlangıç'} - {endDate ? new Date(endDate).toLocaleDateString('tr-TR') : 'Bugün'} | Rapor Tarihi: {new Date().toLocaleDateString('tr-TR')}</p>
         </div>
 
@@ -1807,7 +1879,7 @@ function AdminExpenses({ transactions, onAddTransaction, onAddBulkTransactions }
   );
 }
 
-function AdminHistoryTabs({ transactions, sysLogs, onDeleteTransaction, onDeleteTransactionGroup, onDeleteMultipleTransactions }) {
+function AdminHistoryTabs({ buildingConfig, transactions, sysLogs, onDeleteTransaction, onDeleteTransactionGroup, onDeleteMultipleTransactions }) {
   const [activeTab, setActiveTab] = useState('txs'); 
   const [expandedGroups, setExpandedGroups] = useState(new Set());
   const [searchTerm, setSearchTerm] = useState('');
@@ -1885,7 +1957,7 @@ function AdminHistoryTabs({ transactions, sysLogs, onDeleteTransaction, onDelete
       </div>
 
       <div className="print-only mb-6 text-center border-b-2 border-slate-800 pb-4 mt-4">
-        <h2 className="text-2xl font-bold uppercase">{activeTab === 'txs' ? 'İşlem Geçmişi Dökümü' : 'Sistem Logları (Denetim İzi) Raporu'}</h2>
+        <h2 className="text-2xl font-bold uppercase">{buildingConfig.buildingName} - {activeTab === 'txs' ? 'İşlem Geçmişi Dökümü' : 'Sistem Logları (Denetim İzi) Raporu'}</h2>
         <p className="text-slate-600">Tarih: {new Date().toLocaleDateString('tr-TR')}</p>
       </div>
 
@@ -2001,7 +2073,7 @@ function AdminHistoryTabs({ transactions, sysLogs, onDeleteTransaction, onDelete
   );
 }
 
-function AdminReport({ computations, transactions }) {
+function AdminReport({ buildingConfig, computations, transactions }) {
   const { totalKasa } = computations;
   const [customItems, setCustomItems] = useState([]);
   const [newItem, setNewItem] = useState('');
@@ -2031,14 +2103,14 @@ function AdminReport({ computations, transactions }) {
         <div className="flex justify-between items-center mb-8 border-b-2 border-slate-800 pb-4">
           <div>
             <h2 className="text-2xl font-bold uppercase tracking-wide text-slate-800">Yönetim Kurulu Faaliyet & Denetim Raporu</h2>
-            <p className="text-slate-600 mt-1">Yükseller Apartmanı • Rapor Tarihi: {new Date().toLocaleDateString('tr-TR')}</p>
+            <p className="text-slate-600 mt-1">{buildingConfig.buildingName} • Rapor Tarihi: {new Date().toLocaleDateString('tr-TR')}</p>
           </div>
           <button onClick={() => handlePrint('auditor-report-print', 'Denetci_Raporu')} className="no-print bg-slate-800 text-white px-5 py-2.5 rounded-lg flex items-center hover:bg-slate-900 font-bold transition-colors shadow-sm"><Printer size={18} className="mr-2"/> PDF İndir / Yazdır</button>
         </div>
 
         <div className="space-y-6 text-slate-700 leading-relaxed text-justify">
           <p className="indent-8">Sayın Kat Malikleri;</p>
-          <p className="indent-8">Yükseller Apartmanı Yönetim Kurulunun, geride bıraktığımız döneme ait gelir-gider hesapları, banka ve kasa hareketleri ile karar defteri, tarafımızca detaylı bir şekilde incelenmiştir.</p>
+          <p className="indent-8">{buildingConfig.buildingName} Yönetim Kurulunun, geride bıraktığımız döneme ait gelir-gider hesapları, banka ve kasa hareketleri ile karar defteri, tarafımızca detaylı bir şekilde incelenmiştir.</p>
           <p className="indent-8">Yapılan denetimler sonucunda;</p>
           <ul className="list-disc pl-10 space-y-2">
             <li>Karar defterinin usulüne uygun tutulduğu, alınan kararların deftere işlenerek imza altına alındığı,</li>
@@ -2063,7 +2135,7 @@ function AdminReport({ computations, transactions }) {
   );
 }
 
-function AdminAssembly({ units, computations, transactions, settings }) {
+function AdminAssembly({ buildingConfig, units, computations, transactions, settings }) {
   const [docType, setDocType] = useState('butce'); 
   const [meetingType, setMeetingType] = useState('olagan'); 
   const [meetingDate, setMeetingDate] = useState('');
@@ -2095,7 +2167,6 @@ function AdminAssembly({ units, computations, transactions, settings }) {
 
   const handleGenerateBudget = () => {
     const expenses = transactions.filter(t => t.type === 'expense');
-    
     let dataMonths = 1;
     if (expenses.length > 0) {
       const dates = expenses.map(e => new Date(e.date).getTime());
@@ -2128,7 +2199,6 @@ function AdminAssembly({ units, computations, transactions, settings }) {
          else if (cat === 'Asansör') projectedMonthly = 2000;
          else if (cat === 'Temizlik') projectedMonthly = 1500;
          else projectedMonthly = 1000;
-         
          defaultNote = 'Geçmiş veri bulunmadığı için piyasa tahmini üzerinden eklendi.';
       } else {
          if (cat === 'Elektrik' || cat === 'Su') defaultNote = `Aylık ortalama harcama (${monthlyAvg.toFixed(0)} TL) üzerinden tahmini %${inflationRate} artış uygulanmıştır.`;
@@ -2157,14 +2227,12 @@ function AdminAssembly({ units, computations, transactions, settings }) {
       else if (field === 'amount') {
         updatedItem.monthlyAmount = Math.round(Number(value) / Number(updatedItem.months));
       }
-      
       return updatedItem;
     }));
   };
 
+  // Dinamik Bütçe Hesaplamaları
   const totalAnnualBudget = budgetItems.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  
-  // MAL SAHİBİ VE KİRACI PAYLARININ AYRIŞTIRILMASI
   const ownerAnnual = budgetItems.filter(i => i.category.includes('Demirbaş') || i.category.includes('Yatırım')).reduce((sum, i) => sum + Number(i.amount || 0), 0);
   const personelAnnual = budgetItems.filter(i => i.category.includes('Maaş') || i.category.includes('Personel') || i.category.includes('Kıdem')).reduce((sum, i) => sum + Number(i.amount || 0), 0);
   const operatingArsaAnnual = totalAnnualBudget - ownerAnnual - personelAnnual;
@@ -2173,8 +2241,9 @@ function AdminAssembly({ units, computations, transactions, settings }) {
   const personelMonthly = personelAnnual / 12;
   const operatingArsaMonthly = operatingArsaAnnual / 12;
 
-  const totalUnitsCount = units.length; 
-  const totalArsaPayi = 5741; 
+  // DINAMİK ARSA PAYI VE BİRİM HESAPLAMALARI
+  const totalUnitsCount = units.length || 1; 
+  const totalArsaPayi = units.reduce((sum, u) => sum + (Number(u.arsaPayi) || 0), 0) || 1; 
 
   const calculateAidat = (arsaPayi) => {
     const esitPay = personelMonthly / totalUnitsCount; 
@@ -2186,6 +2255,21 @@ function AdminAssembly({ units, computations, transactions, settings }) {
       total: Math.ceil(esitPay + arsaPayiIsletme + arsaPayiYatirim)
     };
   };
+
+  // Aidat Tablosu İçin Gruplama (Aynı Arsa Payına ve Tipe Sahip Olanları Grupla)
+  const unitGroups = useMemo(() => {
+    const groups = {};
+    units.forEach(u => {
+      const key = `${u.type}-${u.arsaPayi}`;
+      if(!groups[key]) groups[key] = { type: u.type, arsaPayi: Number(u.arsaPayi)||0, count: 0, names: [] };
+      groups[key].count++;
+      groups[key].names.push(u.name);
+    });
+    return Object.values(groups).map(g => ({
+      name: `${g.count} Adet ${g.type === 'daire' ? 'Daire' : 'Dükkan'} (Örn: ${g.names.slice(0,2).join(', ')})`,
+      payi: g.arsaPayi
+    }));
+  }, [units]);
 
   return (
     <div className="space-y-6">
@@ -2223,11 +2307,11 @@ function AdminAssembly({ units, computations, transactions, settings }) {
           <div className="flex flex-col lg:flex-row justify-between lg:items-center mb-6 gap-4">
             <div>
               <h3 className="font-bold text-lg text-emerald-800 flex items-center"><Calculator className="mr-2" size={20}/> Akıllı Bütçe Planlayıcı</h3>
-              <p className="text-sm text-emerald-700 mt-1">Geçmiş verilerinizi ve "Sistem Ayarları"ndaki parametreleri kullanarak otomatik taslak oluşturur.</p>
+              <p className="text-sm text-emerald-700 mt-1">Sistemdeki toplam birim ({totalUnitsCount}) ve arsa payı ({totalArsaPayi}) üzerinden dinamik oranlama.</p>
             </div>
             <div className="flex gap-2">
               <div className="bg-white px-3 py-1.5 rounded-lg border border-emerald-200 flex items-center">
-                <span className="text-sm text-emerald-700 font-medium mr-2">Enflasyon/Artış:</span>
+                <span className="text-sm text-emerald-700 font-medium mr-2">Enflasyon:</span>
                 <input type="number" className="w-16 border-none outline-none text-emerald-800 font-bold bg-transparent text-right" value={inflationRate} onChange={e => setInflationRate(e.target.value)} />
                 <span className="text-emerald-800 font-bold ml-1">%</span>
               </div>
@@ -2319,10 +2403,10 @@ function AdminAssembly({ units, computations, transactions, settings }) {
         
         {docType === 'butce' && (
           <div className="text-slate-900 leading-relaxed text-justify">
-             <h1 className="text-xl font-bold text-center mb-8 uppercase tracking-wide border-b-2 border-black pb-4">Yükseller Apartmanı Yeni Dönem<br/>Tahmini İşletme Projesi (Bütçe)</h1>
+             <h1 className="text-xl font-bold text-center mb-8 uppercase tracking-wide border-b-2 border-black pb-4">{buildingConfig.buildingName} Yeni Dönem<br/>Tahmini İşletme Projesi (Bütçe)</h1>
              <p className="mb-6 text-right"><strong>Hazırlanma Tarihi:</strong> {new Date().toLocaleDateString('tr-TR')}</p>
              <p className="mb-4"><strong>Sayın Kat Malikleri;</strong></p>
-             <p className="mb-6 indent-8">Kat mülkiyeti kanunu gereği, apartmanımızın önümüzdeki döneme ait tahmini gelir ve giderlerini belirlemek, hizmetlerin aksamadan yürütülmesini sağlamak amacıyla Yönetim Kurulumuzca hazırlanan İşletme Projesi aşağıda sunulmuştur. Bütçe hesaplamalarında geçmiş dönem gerçek verileri, asgari ücret öngörüleri ve güncel piyasa/enflasyon koşulları dikkate alınmıştır.</p>
+             <p className="mb-6 indent-8">Kat mülkiyeti kanunu gereği, sitemizin önümüzdeki döneme ait tahmini gelir ve giderlerini belirlemek, hizmetlerin aksamadan yürütülmesini sağlamak amacıyla Yönetim Kurulumuzca hazırlanan İşletme Projesi aşağıda sunulmuştur. Bütçe hesaplamalarında geçmiş dönem gerçek verileri, asgari ücret öngörüleri ve güncel piyasa/enflasyon koşulları dikkate alınmıştır.</p>
              
              <h3 className="font-bold text-lg mb-3 underline">1. Tahmini Gider Tablosu</h3>
              <table className="w-full text-left border-collapse border border-black mb-2 text-sm">
@@ -2379,11 +2463,15 @@ function AdminAssembly({ units, computations, transactions, settings }) {
                   <span className="font-medium text-slate-600">Aylık Demirbaş/Yatırım (Arsa Payı - Mal Sahibi):</span>
                   <span className="font-bold text-orange-600">{ownerMonthly.toLocaleString('tr-TR', { maximumFractionDigits: 2 })} TL</span>
                 </div>
+                <div className="flex justify-between border-b border-slate-300 pb-2 mb-2 text-xs text-slate-500">
+                  <span>Toplam Sistem Birim Sayısı: {totalUnitsCount}</span>
+                  <span>Toplam Arsa Payı: {totalArsaPayi}</span>
+                </div>
                 
                 <table className="w-full mt-6 text-sm border-collapse border border-slate-300 bg-white">
                   <thead className="bg-slate-200 text-slate-800">
                     <tr>
-                      <th className="p-2 border border-slate-300 text-left">Birim Tipi / Numarası</th>
+                      <th className="p-2 border border-slate-300 text-left">Birim Tipi / Grubu</th>
                       <th className="p-2 border border-slate-300 text-center">Arsa Payı</th>
                       <th className="p-2 border border-slate-300 text-right">Kiracı / İşletme Payı</th>
                       <th className="p-2 border border-slate-300 text-right">Mal Sahibi (Yatırım) Payı</th>
@@ -2391,18 +2479,12 @@ function AdminAssembly({ units, computations, transactions, settings }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {[
-                      { name: "Konutlar (Daire 1-44 Arası Tümü)", payi: 110 },
-                      { name: "Dükkan 45, 46", payi: 140 },
-                      { name: "Dükkan 47, 48, 49", payi: 70 },
-                      { name: "Dükkan 50", payi: 90 },
-                      { name: "Dükkan 51", payi: 321 }
-                    ].map((g, idx) => {
+                    {unitGroups.map((g, idx) => {
                       const fees = calculateAidat(g.payi);
                       return (
                         <tr key={idx}>
                           <td className="p-2 border border-slate-300">{g.name}</td>
-                          <td className="p-2 border border-slate-300 text-center text-slate-500">{g.payi} / 5741</td>
+                          <td className="p-2 border border-slate-300 text-center text-slate-500">{g.payi} / {totalArsaPayi}</td>
                           <td className="p-2 border border-slate-300 text-right font-medium text-slate-700">{fees.tenant.toLocaleString('tr-TR')} TL</td>
                           <td className="p-2 border border-slate-300 text-right font-medium text-orange-600">{fees.owner.toLocaleString('tr-TR')} TL</td>
                           <td className="p-2 border border-slate-300 text-right font-bold text-slate-800 bg-slate-50">{fees.total.toLocaleString('tr-TR')} TL</td>
@@ -2414,16 +2496,16 @@ function AdminAssembly({ units, computations, transactions, settings }) {
              </div>
              
              <p className="mb-12 indent-8 text-sm italic">* İşbu işletme projesi kat malikleri kurulunda görüşülerek karara bağlanacak olup, onaylanması halinde tebliğ hükmünde sayılacaktır. Ortaya çıkabilecek olağanüstü ve mecburi tamiratlar (çatı, tesisat vs.) için ayrıca ek bütçe kararı alınabilecektir.</p>
-             <div className="text-right"><p className="font-bold mb-8">Yükseller Apartmanı Yönetim Kurulu</p><p className="border-t border-black pt-2 inline-block w-48 text-center">İmza</p></div>
+             <div className="text-right"><p className="font-bold mb-8">{buildingConfig.buildingName} Yönetim Kurulu</p><p className="border-t border-black pt-2 inline-block w-48 text-center">İmza</p></div>
           </div>
         )}
 
         {docType === 'cagri' && (
           <div className="text-slate-900 leading-relaxed">
-            <h1 className="text-xl font-bold text-center mb-8 uppercase tracking-wide border-b-2 border-black pb-4">Yükseller Apartmanı Kat Malikleri Kurulu<br/>{meetingType === 'olagan' ? 'Olağan' : 'Olağanüstü'} Genel Kurul Toplantı Çağrısı</h1>
+            <h1 className="text-xl font-bold text-center mb-8 uppercase tracking-wide border-b-2 border-black pb-4">{buildingConfig.buildingName} Kat Malikleri Kurulu<br/>{meetingType === 'olagan' ? 'Olağan' : 'Olağanüstü'} Genel Kurul Toplantı Çağrısı</h1>
             <p className="mb-4 text-right"><strong>Tarih:</strong> {new Date().toLocaleDateString('tr-TR')}</p>
             <p className="mb-6"><strong>Sayın Kat Maliki;</strong></p>
-            <p className="mb-4 indent-8 text-justify">{meetingType === 'olagan' ? 'Yükseller Apartmanı Kat Malikleri Kurulu, yıllık olağan toplantısını yapmak, geçmiş dönemi değerlendirmek ve yeni dönem bütçesi ile yönetimini belirlemek üzere aşağıda belirtilen gündem maddelerini görüşmek için toplanacaktır.' : 'Yükseller Apartmanı Kat Malikleri Kurulu, apartmanımızı ilgilendiren önemli ve acil konuları görüşmek ve karara bağlamak üzere aşağıda belirtilen gündem maddeleriyle olağanüstü toplanacaktır.'}</p>
+            <p className="mb-4 indent-8 text-justify">{meetingType === 'olagan' ? `${buildingConfig.buildingName} Kat Malikleri Kurulu, yıllık olağan toplantısını yapmak, geçmiş dönemi değerlendirmek ve yeni dönem bütçesi ile yönetimini belirlemek üzere aşağıda belirtilen gündem maddelerini görüşmek için toplanacaktır.` : `${buildingConfig.buildingName} Kat Malikleri Kurulu, sitemizi ilgilendiren önemli ve acil konuları görüşmek ve karara bağlamak üzere aşağıda belirtilen gündem maddeleriyle olağanüstü toplanacaktır.`}</p>
             <p className="mb-4 indent-8 text-justify">Toplantı <strong>{meetingDate ? new Date(meetingDate).toLocaleDateString('tr-TR') : '.../.../202..'}</strong> tarihinde, saat <strong>{meetingTime}</strong>'da <strong>{meetingPlace}</strong> adresinde yapılacaktır. Bu toplantıda yeterli çoğunluk sağlanamadığı takdirde, ikinci toplantı bir hafta sonra aynı yer ve saatte çoğunluk aranmaksızın yapılacaktır.</p>
             <p className="mb-8 indent-8 text-justify">Kat Mülkiyeti Kanunu uyarınca alınacak kararlar tüm kat maliklerini bağlayacağından, toplantıya katılmanızı veya kendinizi bir vekille temsil ettirmenizi önemle rica ederiz.</p>
             
@@ -2441,13 +2523,13 @@ function AdminAssembly({ units, computations, transactions, settings }) {
                 <li>Dilek, temenniler ve kapanış.</li>
               </ol>
             )}
-            <div className="text-right mt-12"><p className="font-bold mb-8">Yükseller Apartmanı Yönetim Kurulu</p><p className="border-t border-black pt-2 inline-block w-48 text-center">İmza</p></div>
+            <div className="text-right mt-12"><p className="font-bold mb-8">{buildingConfig.buildingName} Yönetim Kurulu</p><p className="border-t border-black pt-2 inline-block w-48 text-center">İmza</p></div>
           </div>
         )}
 
         {docType === 'hazirun' && (
           <div className="text-slate-900">
-            <h1 className="text-lg font-bold text-center mb-6 uppercase tracking-wide border-b-2 border-black pb-2">Yükseller Apartmanı {meetingType === 'olagan' ? 'Olağan' : 'Olağanüstü'} Genel Kurul Hazirun Cetveli</h1>
+            <h1 className="text-lg font-bold text-center mb-6 uppercase tracking-wide border-b-2 border-black pb-2">{buildingConfig.buildingName} {meetingType === 'olagan' ? 'Olağan' : 'Olağanüstü'} Genel Kurul Hazirun Cetveli</h1>
             <div className="flex justify-between text-sm mb-4 font-medium"><p><strong>Toplantı Tarihi:</strong> {meetingDate ? new Date(meetingDate).toLocaleDateString('tr-TR') : '...............'}</p><p><strong>Toplantı Yeri:</strong> {meetingPlace}</p></div>
             <table className="w-full text-left border-collapse border border-black text-sm">
               <thead><tr className="bg-slate-100"><th className="p-2 border border-black w-12 text-center">No</th><th className="p-2 border border-black w-32">Birim Adı</th><th className="p-2 border border-black">Malik Adı Soyadı</th><th className="p-2 border border-black w-32 text-center">Asaleten / Vekaleten</th><th className="p-2 border border-black w-32 text-center">İmza</th></tr></thead>
@@ -2491,8 +2573,8 @@ function AdminAssembly({ units, computations, transactions, settings }) {
           <div className="text-slate-900 leading-relaxed text-justify">
             <h1 className="text-xl font-bold text-center mb-8 uppercase tracking-wide border-b-2 border-black pb-4">Denetim Kurulu Raporu</h1>
             <p className="mb-6 text-right"><strong>Tarih:</strong> {new Date().toLocaleDateString('tr-TR')}</p>
-            <p className="mb-4"><strong>Yükseller Apartmanı Kat Malikleri Genel Kurul Başkanlığı'na;</strong></p>
-            <p className="mb-4 indent-8">Apartmanımız Yönetim Kurulu'nun, geçmiş çalışma dönemine ait hesapları, karar defteri, işletme defteri ile gelir-gider makbuzları ve faturaları kurulumuzca detaylı bir şekilde incelenmiştir.</p>
+            <p className="mb-4"><strong>{buildingConfig.buildingName} Kat Malikleri Genel Kurul Başkanlığı'na;</strong></p>
+            <p className="mb-4 indent-8">Site Yönetim Kurulu'nun, geçmiş çalışma dönemine ait hesapları, karar defteri, işletme defteri ile gelir-gider makbuzları ve faturaları kurulumuzca detaylı bir şekilde incelenmiştir.</p>
             <p className="mb-4 indent-8">Yapılan denetimler sonucunda;</p>
             <ul className="list-disc pl-10 mb-4 space-y-2">
               <li>Karar defterinin usulüne uygun tutulduğu, kararların imza altına alındığı,</li><li>Gelirlerin makbuz veya banka dekontları karşılığında tahsil edildiği ve kayıtlara doğru geçirildiği,</li><li>Giderlerin tamamının fatura veya geçerli yasal belgelere dayandığı, harcamaların site menfaatine uygun olduğu,</li><li>Kasa ve banka kayıtları ile defter kayıtlarının birbirini tam olarak tuttuğu ({totalKasa.toLocaleString('tr-TR')} TL nakit mevcudu bulunduğu) tespit edilmiştir.</li>
@@ -2508,7 +2590,7 @@ function AdminAssembly({ units, computations, transactions, settings }) {
   );
 }
 
-function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransaction, onLogout }) {
+function ResidentDashboard({ buildingConfig, unitData, transactions, balanceObj, onAddTransaction, onLogout }) {
   const [activeTab, setActiveTab] = useState('summary');
   const [sysMessage, setSysMessage] = useState(null);
   const notificationSent = useRef(false);
@@ -2560,7 +2642,7 @@ function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransactio
   useEffect(() => {
     if (showUrgentReminder && !notificationSent.current && 'Notification' in window) {
       const sendNotification = () => {
-        new Notification('Yükseller Apartmanı - Son Gün Hatırlatması!', {
+        new Notification(`${buildingConfig.buildingName} - Son Gün Hatırlatması!`, {
           body: `Sayın ${residentName}, gecikme faizi işlememesi için gün sonuna kadar ${balance.toLocaleString('tr-TR')} TL tutarındaki borcunuzu ödeyiniz.`,
           icon: 'https://cdn-icons-png.flaticon.com/512/565/565368.png'
         });
@@ -2582,8 +2664,8 @@ function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransactio
       <header className="bg-blue-600 text-white sticky top-0 z-10 shadow-md no-print">
         <div className="max-w-4xl mx-auto px-4 py-4 flex justify-between items-center">
           <div className="flex items-center space-x-2">
-            {unitId.includes('Daire') ? <Home className="text-blue-200" /> : <Store className="text-blue-200" />}
-            <div><span className="font-bold text-lg block leading-tight">{unitName} Paneli</span><span className="text-xs text-blue-200 hidden sm:block">Hoş geldiniz, {residentName || 'Sakin'}</span></div>
+            {unitData.type === 'daire' ? <Home className="text-blue-200" /> : <Store className="text-blue-200" />}
+            <div><span className="font-bold text-lg block leading-tight">{buildingConfig.buildingName}</span><span className="text-xs text-blue-200 hidden sm:block">Hoş geldiniz, {residentName || 'Sakin'} ({unitName})</span></div>
           </div>
           <button onClick={onLogout} className="flex items-center text-blue-100 hover:text-white transition-colors"><LogOut size={18} className="mr-1" /> Çıkış</button>
         </div>
@@ -2636,7 +2718,7 @@ function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransactio
               </div>
 
               <div className="print-only mb-6 text-center border-b-2 border-slate-800 pb-4 mt-4 px-6">
-                <h2 className="text-2xl font-bold uppercase">Yükseller Apartmanı - {unitName} Hesap Ekstresi</h2>
+                <h2 className="text-2xl font-bold uppercase">{buildingConfig.buildingName} - {unitName} Hesap Ekstresi</h2>
                 <p className="text-slate-600">Sayın {residentName} | Tarih: {new Date().toLocaleDateString('tr-TR')}</p>
               </div>
 
@@ -2683,7 +2765,7 @@ function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransactio
             </div>
             
             <div className="print-only mb-6 text-center border-b-2 border-slate-800 pb-4 mt-4 px-6">
-              <h2 className="text-2xl font-bold uppercase">Yükseller Apartmanı - Bina Giderleri Tablosu</h2>
+              <h2 className="text-2xl font-bold uppercase">{buildingConfig.buildingName} - Bina Giderleri Tablosu</h2>
               <p className="text-slate-600">Tarih: {new Date().toLocaleDateString('tr-TR')}</p>
             </div>
 
@@ -2709,7 +2791,6 @@ function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransactio
           </div>
         )}
 
-        {}
         <footer className="mt-12 mb-8 text-center no-print">
           <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
             Powered by UKURTCU
