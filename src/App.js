@@ -158,13 +158,16 @@ const getBalances = (txs, units) => {
 
   Object.values(unitBalances).forEach(details => {
     let remainingPayment = details.payment;
+    
+    // Mahsuplaşma sırası (Önce faiz, sonra ana paralar)
     if (remainingPayment >= details.penalty) { details.penaltyBalance = 0; remainingPayment -= details.penalty; } else { details.penaltyBalance = details.penalty - remainingPayment; remainingPayment = 0; }
     if (remainingPayment >= details.due) { details.dueBalance = 0; remainingPayment -= details.due; } else { details.dueBalance = details.due - remainingPayment; remainingPayment = 0; }
     if (remainingPayment >= details.fixture) { details.fixtureBalance = 0; remainingPayment -= details.fixture; } else { details.fixtureBalance = details.fixture - remainingPayment; remainingPayment = 0; }
     if (remainingPayment >= details.extra) { details.extraBalance = 0; remainingPayment -= details.extra; } else { details.extraBalance = details.extra - remainingPayment; remainingPayment = 0; }
     if (remainingPayment >= details.custom) { details.customBalance = 0; remainingPayment -= details.custom; } else { details.customBalance = details.custom - remainingPayment; remainingPayment = 0; }
 
-    details.balance = details.dueBalance + details.fixtureBalance + details.extraBalance + details.customBalance + details.penaltyBalance;
+    // Eğer remainingPayment > 0 ise kişi alacaklı durumdadır (fazla ödeme). Bakiye eksiye düşmeli.
+    details.balance = details.dueBalance + details.fixtureBalance + details.extraBalance + details.customBalance + details.penaltyBalance - remainingPayment;
 
     if (details.dueBalance > 0) totalBekleyenAidat += details.dueBalance;
     if (details.fixtureBalance > 0) totalBekleyenDemirbas += details.fixtureBalance;
@@ -399,17 +402,18 @@ export default function App() {
     }
   };
 
-  const addBulkDue = async (type, daireAmount, dukkanAmounts, description) => {
+  const addBulkDue = async (type, daireAmount, dukkanAmounts, description, dateStr) => {
     try {
       const batch = writeBatch(db);
       const groupId = `bulk-${Date.now()}`;
+      const isoDate = dateStr ? new Date(dateStr).toISOString() : new Date().toISOString();
 
       units.forEach((unit) => {
         const amount = unit.type === 'daire' ? Number(daireAmount) : Number(dukkanAmounts[unit.id] || 0);
         if (amount > 0) {
           const docRef = doc(collection(db, "transactions"));
           batch.set(docRef, {
-            date: new Date().toISOString(), 
+            date: isoDate, 
             type, 
             amount, 
             unitId: unit.id, 
@@ -520,11 +524,11 @@ export default function App() {
     <>
       <style dangerouslySetInnerHTML={{__html: `
         @media print {
-          @page { size: A4 portrait; margin: 15mm; } /* Her sayfada üst/alt ve yan boşlukları garanti eder */
+          @page { size: A4 portrait; margin: 15mm; } 
           body { -webkit-print-color-adjust: exact; print-color-adjust: exact; background: white; margin: 0; padding: 0; }
           body * { visibility: hidden; }
           .print-target, .print-target * { visibility: visible !important; }
-          .print-target { position: absolute; left: 0; top: 0; width: 100%; height: auto; margin: 0; padding: 0; background: white; } /* Padding kaldırıldı, boşlukları @page yönetecek */
+          .print-target { position: absolute; left: 0; top: 0; width: 100%; height: auto; margin: 0; padding: 0; background: white; } 
           .no-print, .no-print * { display: none !important; }
           .print-only { display: block !important; }
           
@@ -998,6 +1002,7 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
   const [daireAmount, setDaireAmount] = useState('');
   const [dukkanAmounts, setDukkanAmounts] = useState({});
   const [bulkDesc, setBulkDesc] = useState('');
+  const [bulkDate, setBulkDate] = useState(new Date().toISOString().split('T')[0]);
 
   const [sysMessage, setSysMessage] = useState(null);
   const showMessage = (text, type = 'success') => { setSysMessage({ text, type }); setTimeout(() => setSysMessage(null), 4000); };
@@ -1055,9 +1060,9 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
 
   const handleBulkSubmit = (e) => {
     e.preventDefault();
-    if(daireAmount && bulkDesc) {
-      onAddBulkDue(bulkType, daireAmount, dukkanAmounts, bulkDesc);
-      setShowBulkModal(false); setBulkType('due'); setDaireAmount(''); setDukkanAmounts({}); setBulkDesc('');
+    if(daireAmount && bulkDesc && bulkDate) {
+      onAddBulkDue(bulkType, daireAmount, dukkanAmounts, bulkDesc, bulkDate);
+      setShowBulkModal(false); setBulkType('due'); setDaireAmount(''); setDukkanAmounts({}); setBulkDesc(''); setBulkDate(new Date().toISOString().split('T')[0]);
       showMessage("Tüm birimlere borçlandırma başarıyla eklendi.");
     }
   };
@@ -1326,17 +1331,22 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
         </div>
       )}
 
-      {}
       {showBulkModal && ( 
         <div className="bg-white p-6 rounded-xl shadow-sm border border-blue-100 mb-6 no-print">
           <h3 className="font-bold text-lg mb-4">Toplu Borçlandırma Ekle</h3>
           <form onSubmit={handleBulkSubmit} className="space-y-4">
-            <div className="flex flex-wrap gap-4 mb-4">
-              <label className="flex items-center cursor-pointer text-slate-700"><input type="radio" name="bulkType" value="due" checked={bulkType === 'due'} onChange={(e) => setBulkType(e.target.value)} className="mr-2" /> Normal Aidat</label>
-              <label className="flex items-center cursor-pointer text-slate-700"><input type="radio" name="bulkType" value="fixture" checked={bulkType === 'fixture'} onChange={(e) => setBulkType(e.target.value)} className="mr-2" /> Demirbaş</label>
-              <label className="flex items-center cursor-pointer text-slate-700"><input type="radio" name="bulkType" value="extra" checked={bulkType === 'extra'} onChange={(e) => setBulkType(e.target.value)} className="mr-2" /> Ekstra/Acil Toplama</label>
+            <div className="flex flex-col mb-4 gap-4 border-b border-slate-100 pb-4">
+              <div className="flex flex-wrap gap-4">
+                <label className="flex items-center cursor-pointer text-slate-700"><input type="radio" name="bulkType" value="due" checked={bulkType === 'due'} onChange={(e) => setBulkType(e.target.value)} className="mr-2" /> Normal Aidat</label>
+                <label className="flex items-center cursor-pointer text-slate-700"><input type="radio" name="bulkType" value="fixture" checked={bulkType === 'fixture'} onChange={(e) => setBulkType(e.target.value)} className="mr-2" /> Demirbaş</label>
+                <label className="flex items-center cursor-pointer text-slate-700"><input type="radio" name="bulkType" value="extra" checked={bulkType === 'extra'} onChange={(e) => setBulkType(e.target.value)} className="mr-2" /> Ekstra/Acil Toplama</label>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-4">
+                <input type="date" required className="w-full sm:w-40 border border-slate-300 rounded-lg px-4 py-2" value={bulkDate} onChange={e => setBulkDate(e.target.value)} title="İşlem Tarihi" />
+                <input type="text" required placeholder="Açıklama / Ay (Örn: Kasım Aidatı, Çatı Onarımı)" className="flex-1 border border-slate-300 rounded-lg px-4 py-2" value={bulkDesc} onChange={e => setBulkDesc(e.target.value)} />
+              </div>
             </div>
-            <input type="text" required placeholder="Açıklama / Ay (Örn: Kasım Aidatı, Çatı Onarımı)" className="w-full border border-slate-300 rounded-lg px-4 py-2" value={bulkDesc} onChange={e => setBulkDesc(e.target.value)} />
+            
             <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
               <h4 className="font-semibold text-slate-700 mb-3 flex items-center"><Home size={16} className="mr-2"/> Daireler (Toplu Tutar)</h4>
               <input type="number" required placeholder="Tüm daireler için tutar (TL)" className="w-full sm:w-64 border border-slate-300 rounded-lg px-4 py-2" value={daireAmount} onChange={e => setDaireAmount(e.target.value)} />
@@ -1360,16 +1370,21 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
         </div>
       )}
 
+      {}
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-x-auto" id="units-print-table">
         <div className="print-only mb-6 text-center border-b-2 border-slate-800 pb-4">
           <h2 className="text-2xl font-bold uppercase tracking-wide">Yükseller Apartmanı - Daire ve Dükkan Listesi</h2>
-          <p className="text-slate-600">Filtre: {filterStatus === 'debt' ? 'Borçlular' : filterStatus === 'nodebt' ? 'Borcu Olmayanlar' : 'Tümü'} | Tarih: {new Date().toLocaleDateString('tr-TR')}</p>
+          <p className="text-slate-600">Filtre: {filterStatus === 'debt' ? 'Borçlular' : filterStatus === 'nodebt' ? 'Borcu Olmayanlar / Alacaklılar' : 'Tümü'} | Tarih: {new Date().toLocaleDateString('tr-TR')}</p>
         </div>
 
         <table className="w-full text-left border-collapse min-w-[800px]">
           <thead>
             <tr className="bg-slate-50 text-slate-500 text-sm border-b border-slate-100">
-              <th className="p-4 font-medium">Birim</th><th className="p-4 font-medium">Sakin / Durum</th><th className="p-4 font-medium">İletişim</th><th className="p-4 font-medium">Bakiye</th><th className="p-4 font-medium text-right no-print">İşlemler</th>
+              <th className="p-4 font-medium">Birim</th>
+              <th className="p-4 font-medium">Sakin / Durum</th>
+              <th className="p-4 font-medium no-print">İletişim</th>
+              <th className="p-4 font-medium">Bakiye</th>
+              <th className="p-4 font-medium text-right no-print">İşlemler</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -1386,9 +1401,9 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
                     <td className="p-4"><div className="font-medium text-slate-800 flex items-center">{unit.type === 'daire' ? <Home size={16} className="text-slate-400 mr-2"/> : <Store size={16} className="text-slate-400 mr-2"/>}{unit.name}</div></td>
                     <td className="p-4">
                       <div className="font-medium text-slate-700">{residentName}</div>
-                      <div className="flex items-center mt-1"><span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${isTenant ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>{isTenant ? 'Kiracı Oturuyor' : 'Mal Sahibi'}</span></div>
+                      <div className="flex items-center mt-1 no-print"><span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${isTenant ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>{isTenant ? 'Kiracı Oturuyor' : 'Mal Sahibi'}</span></div>
                     </td>
-                    <td className="p-4"><div className="text-sm text-slate-600 flex items-center">{isTenant ? unit.tenantPhone : unit.ownerPhone ? <><Phone size={12} className="mr-1"/> {isTenant ? unit.tenantPhone : unit.ownerPhone}</> : <span className="text-slate-400 italic">Eksik Bilgi</span>}</div></td>
+                    <td className="p-4 no-print"><div className="text-sm text-slate-600 flex items-center">{isTenant ? unit.tenantPhone : unit.ownerPhone ? <><Phone size={12} className="mr-1"/> {isTenant ? unit.tenantPhone : unit.ownerPhone}</> : <span className="text-slate-400 italic">Eksik Bilgi</span>}</div></td>
                     <td className="p-4">
                       <span className={`px-3 py-1 rounded-full text-sm font-medium ${details.balance > 0 ? 'bg-red-100 text-red-700' : details.balance < 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
                         {details.balance > 0 ? `${details.balance.toLocaleString('tr-TR')} TL Borçlu` : details.balance < 0 ? `${Math.abs(details.balance).toLocaleString('tr-TR')} TL Alacaklı` : 'Borcu Yok'}
@@ -2164,7 +2179,6 @@ function AdminAssembly({ units, computations, transactions, settings }) {
 
   const totalAnnualBudget = budgetItems.reduce((sum, item) => sum + Number(item.amount || 0), 0);
   
-  // MAL SAHİBİ VE KİRACI PAYLARININ AYRIŞTIRILMASI
   const ownerAnnual = budgetItems.filter(i => i.category.includes('Demirbaş') || i.category.includes('Yatırım')).reduce((sum, i) => sum + Number(i.amount || 0), 0);
   const personelAnnual = budgetItems.filter(i => i.category.includes('Maaş') || i.category.includes('Personel') || i.category.includes('Kıdem')).reduce((sum, i) => sum + Number(i.amount || 0), 0);
   const operatingArsaAnnual = totalAnnualBudget - ownerAnnual - personelAnnual;
@@ -2262,7 +2276,7 @@ function AdminAssembly({ units, computations, transactions, settings }) {
         </div>
       )}
 
-      {/* MANUEL MADDE EKLEME ALANLARI (NO-PRINT) */}
+      {}
       {docType === 'cagri' && (
         <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 mb-6 no-print">
           <h3 className="font-semibold text-slate-700 mb-2 flex items-center"><PlusCircle size={18} className="mr-2"/> Çağrı Dilekçesine Ek Gündem Maddesi Ekle</h3>
@@ -2314,7 +2328,6 @@ function AdminAssembly({ units, computations, transactions, settings }) {
         </div>
       )}
 
-      {}
       <div className="bg-white p-10 rounded-xl shadow-sm border border-slate-200" id="printable-assembly-doc">
         
         {docType === 'butce' && (
