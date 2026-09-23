@@ -180,14 +180,15 @@ const getBalances = (txs, units) => {
 };
 
 const runAutoPenalties = (currentTransactions, currentUnits) => {
-  if (currentTransactions.length === 0) return [];
+  if (currentTransactions.length === 0) return { toCreate: [], toUpdate: [], toDelete: [] };
   const sortedTxs = [...currentTransactions].sort((a, b) => new Date(a.date) - new Date(b.date));
   const earliestDate = new Date(sortedTxs[0].date);
   const now = new Date();
   
   let checkDate = new Date(earliestDate.getFullYear(), earliestDate.getMonth() + 1, 1);
-  const newPenalties = [];
-  let simulatedTxs = [...currentTransactions];
+  const toCreate = [];
+  const toUpdate = [];
+  const toDelete = [];
   
   while (checkDate <= now) {
     const year = checkDate.getFullYear();
@@ -197,32 +198,54 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
     
     if (penaltyApplicationDate > now) break;
 
-    const alreadyProcessed = simulatedTxs.some(t => t.groupId === groupId);
+    // Hesaplama anında BU AYIN mevcut faiz ve marker kayıtlarını HESAPLAMADAN HARİÇ TUTUYORUZ
+    // Amacımız ayın 5'indeki "saf, faizsiz" ana para borcunu tespit etmek.
+    const pastTxs = currentTransactions.filter(t => 
+        new Date(t.date) <= penaltyApplicationDate && 
+        t.groupId !== groupId
+    );
     
-    if (!alreadyProcessed) {
-      const pastTxs = simulatedTxs.filter(t => new Date(t.date) <= penaltyApplicationDate);
-      const { unitBalances } = getBalances(pastTxs, currentUnits);
-      let monthHasPenalty = false;
+    const { unitBalances } = getBalances(pastTxs, currentUnits);
+    
+    const existingPenalties = currentTransactions.filter(t => t.groupId === groupId && t.type === 'penalty');
+    const existingMarkers = currentTransactions.filter(t => t.groupId === groupId && t.type === 'system_marker');
+    
+    let monthHasPenalty = false;
+    
+    currentUnits.forEach((unit) => {
+      const b = unitBalances[unit.id];
+      const principal = (b.dueBalance || 0) + (b.fixtureBalance || 0) + (b.extraBalance || 0) + (b.customBalance || 0);
       
-      currentUnits.forEach((unit) => {
-        const b = unitBalances[unit.id];
-        const principal = (b.dueBalance || 0) + (b.fixtureBalance || 0) + (b.extraBalance || 0) + (b.customBalance || 0);
-        
-        if (principal > 0) {
-          const pAmount = Number((principal * 0.05).toFixed(2));
-          const pTx = { id: `auto-${year}-${month}-${unit.id}-${Math.random()}`, date: penaltyApplicationDate.toISOString(), type: 'penalty', amount: pAmount, unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, groupId: groupId };
-          newPenalties.push(pTx); simulatedTxs.push(pTx); monthHasPenalty = true;
+      const expectedAmount = principal > 0 ? Number((principal * 0.05).toFixed(2)) : 0;
+      const existingTx = existingPenalties.find(t => t.unitId === unit.id);
+      
+      if (expectedAmount > 0) {
+        monthHasPenalty = true;
+        if (!existingTx) {
+          // Faiz hiç yazılmamış, oluştur
+          toCreate.push({ date: penaltyApplicationDate.toISOString(), type: 'penalty', amount: expectedAmount, unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, groupId: groupId });
+        } else if (existingTx.amount !== expectedAmount) {
+          // Faiz yazılmış ama kısmi ödeme (veya sonradan girilen ödeme) yüzünden tutar hatalı kalmış, güncelle
+          toUpdate.push({ id: existingTx.id, amount: expectedAmount });
         }
-      });
-      
-      if (!monthHasPenalty) {
-         const marker = { id: `marker-${year}-${month}-${Math.random()}`, date: penaltyApplicationDate.toISOString(), type: 'system_marker', amount: 0, unitId: null, description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) - ${month}/${year}`, groupId: groupId };
-         newPenalties.push(marker); simulatedTxs.push(marker);
+      } else {
+        if (existingTx) {
+          // Ödeme sonradan girilmiş ve aslında faiz işlememesi gerekiyormuş, mevcut faizi sil!
+          toDelete.push({ id: existingTx.id, type: 'penalty' });
+        }
       }
+    });
+    
+    const existingMarker = existingMarkers[0];
+    if (!monthHasPenalty && !existingMarker && existingPenalties.length === 0) {
+       toCreate.push({ date: penaltyApplicationDate.toISOString(), type: 'system_marker', amount: 0, unitId: null, description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) - ${month}/${year}`, groupId: groupId });
+    } else if (monthHasPenalty && existingMarker) {
+       toDelete.push({ id: existingMarker.id, type: 'system_marker' });
     }
+
     checkDate = new Date(year, checkDate.getMonth() + 1, 1);
   }
-  return newPenalties;
+  return { toCreate, toUpdate, toDelete };
 };
 
 const runAutoReminders = (currentTransactions, currentUnits) => {
@@ -325,6 +348,46 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    // İşlemler her değiştiğinde (ör: Toplu excel yüklendiğinde, manuel tahsilat girildiğinde) 
+    // arka planda faizleri otomatik denetle ve saniyeler içinde düzelt (Oto-Mutabakat)
+    if (currentUser === 'admin' && transactions.length > 0 && units.length > 0) {
+      const timer = setTimeout(async () => {
+         const { toCreate, toUpdate, toDelete } = runAutoPenalties(transactions, units);
+         const newReminders = runAutoReminders(transactions, units);
+         const toCreateAll = [...toCreate, ...newReminders];
+         
+         if (toCreateAll.length > 0 || toUpdate.length > 0 || toDelete.length > 0) {
+             const batch = writeBatch(db);
+             
+             toCreateAll.forEach(tx => batch.set(doc(collection(db, "transactions")), { ...tx, addedBy: 'Sistem' }));
+             toUpdate.forEach(tx => batch.update(doc(db, "transactions", tx.id), { amount: tx.amount }));
+             toDelete.forEach(tx => batch.delete(doc(db, "transactions", tx.id)));
+             
+             try {
+               await batch.commit();
+               let msgs = [];
+               const penaltyCreated = toCreateAll.filter(t => t.type === 'penalty').length;
+               const penaltyDeleted = toDelete.filter(t => t.type === 'penalty').length;
+               const penaltyUpdated = toUpdate.length;
+               
+               if (penaltyCreated > 0) msgs.push(`${penaltyCreated} yeni faiz yansıtıldı`);
+               if (penaltyUpdated > 0) msgs.push(`${penaltyUpdated} faiz güncellendi`);
+               if (penaltyDeleted > 0) msgs.push(`Geçmiş ödeme tespit edildi, ${penaltyDeleted} faiz iptal edildi`);
+               
+               if (msgs.length > 0) {
+                 setAutoToast(`Sistem Oto-Mutabakat: ${msgs.join(' | ')}.`);
+                 setTimeout(() => setAutoToast(null), 8000);
+               }
+             } catch (e) {
+               console.error("Otomatik faiz mutabakatı yapılamadı:", e);
+             }
+         }
+      }, 1500); // Excel yüklemelerinde art arda tetiklenmeyi yumuşatmak için gecikme
+      return () => clearTimeout(timer);
+    }
+  }, [transactions, units, currentUser]);
+
   const computations = useMemo(() => getBalances(transactions, units), [transactions, units]);
 
   const lastBilledMonth = useMemo(() => {
@@ -334,32 +397,6 @@ export default function App() {
 
   const handleLogin = (userId) => {
     setCurrentUser(userId);
-    
-    const newPenalties = runAutoPenalties(transactions, units);
-    const newReminders = runAutoReminders(transactions, units);
-    
-    if (newPenalties.length > 0 || newReminders.length > 0) {
-      const autoTxs = [...newPenalties, ...newReminders];
-      
-      const batch = writeBatch(db);
-      autoTxs.forEach(tx => {
-        const docRef = doc(collection(db, "transactions"));
-        batch.set(docRef, { ...tx, addedBy: 'Sistem' });
-      });
-      batch.commit().catch(e => console.error("Otomatik loglar kaydedilemedi", e));
-
-      dispatch({ type: 'ADD_AUTO_TRANSACTIONS', payload: autoTxs });
-      
-      let msgs = [];
-      const penaltyCount = newPenalties.filter(t => t.type === 'penalty').length;
-      if (penaltyCount > 0) msgs.push(`Geçmiş aylara ait ${penaltyCount} adet gecikme faizi yansıtıldı.`);
-      if (newReminders.length > 0) msgs.push(`Borçlu maliklere son gün ödeme hatırlatması gönderildi.`);
-      
-      if (msgs.length > 0) {
-        setAutoToast(`Sistem taraması: ${msgs.join(' | ')}`);
-        setTimeout(() => setAutoToast(null), 7000);
-      }
-    }
   };
   
   const handleLogout = () => setCurrentUser(null);
@@ -2554,17 +2591,6 @@ function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransactio
 
   const expenses = transactions.filter(t => t.type === 'expense').filter(t => t.description.toLowerCase().includes(expenseSearch.toLowerCase())).sort((a,b) => new Date(b.date) - new Date(a.date));
 
-  const handleSimulatePayment = () => { 
-    if (balance <= 0) {
-      setSysMessage({ text: "Şu an ödenmesi gereken bir borcunuz bulunmuyor.", type: "error" });
-      setTimeout(() => setSysMessage(null), 4000);
-      return;
-    }
-    onAddTransaction({ type: 'payment', amount: balance, unitId: unitId, description: 'Online Sistem Ödemesi' });
-    setSysMessage({ text: `Teşekkürler, ${balance.toLocaleString('tr-TR')} TL tutarındaki borcunuz sistem üzerinden ödendi.`, type: "success" });
-    setTimeout(() => setSysMessage(null), 4000);
-  };
-
   const now = new Date();
   const isLastDay = now.getDate() === new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
   const isPastNoon = now.getHours() >= 12;
@@ -2636,9 +2662,6 @@ function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransactio
                   <span>Faiz: <strong className="ml-1">{penaltyBalance.toLocaleString('tr-TR')} TL</strong></span>
                   {fixtureBalance > 0 && <span>Demirbaş: <strong className="ml-1">{fixtureBalance.toLocaleString('tr-TR')} TL</strong></span>}
                 </div>
-              )}
-              {balance > 0 && (
-                <button onClick={handleSimulatePayment} className="bg-white text-red-600 px-8 py-3 rounded-full font-bold hover:bg-red-50 transition-colors shadow-lg flex items-center mx-auto"><Wallet size={20} className="mr-2"/> Kart ile Öde (Simülasyon)</button>
               )}
             </div>
 
