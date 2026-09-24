@@ -199,7 +199,6 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
     if (penaltyApplicationDate > now) break;
 
     // Hesaplama anında BU AYIN mevcut faiz ve marker kayıtlarını HESAPLAMADAN HARİÇ TUTUYORUZ
-    // Amacımız ayın 5'indeki "saf, faizsiz" ana para borcunu tespit etmek.
     const pastTxs = currentTransactions.filter(t => 
         new Date(t.date) <= penaltyApplicationDate && 
         t.groupId !== groupId
@@ -216,22 +215,31 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
       const b = unitBalances[unit.id];
       const principal = (b.dueBalance || 0) + (b.fixtureBalance || 0) + (b.extraBalance || 0) + (b.customBalance || 0);
       
-      const expectedAmount = principal > 0 ? Number((principal * 0.05).toFixed(2)) : 0;
-      const existingTx = existingPenalties.find(t => t.unitId === unit.id);
+      // HATA DÜZELTMESİ: 1 TL altındaki kuruşluk/hatalı bakiyeleri sıfır kabul ederek sonsuz döngüyü önlüyoruz.
+      const expectedAmount = principal >= 1 ? Number((principal * 0.05).toFixed(2)) : 0;
+      
+      // HATA DÜZELTMESİ: .find yerine .filter kullanarak geçmişten kalan olası tüm kopya kayıtları tespit ediyoruz.
+      const existingUnitPenalties = existingPenalties.filter(t => t.unitId === unit.id);
       
       if (expectedAmount > 0) {
         monthHasPenalty = true;
-        if (!existingTx) {
+        if (existingUnitPenalties.length === 0) {
           // Faiz hiç yazılmamış, oluştur
           toCreate.push({ date: penaltyApplicationDate.toISOString(), type: 'penalty', amount: expectedAmount, unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, groupId: groupId });
-        } else if (existingTx.amount !== expectedAmount) {
-          // Faiz yazılmış ama kısmi ödeme (veya sonradan girilen ödeme) yüzünden tutar hatalı kalmış, güncelle
-          toUpdate.push({ id: existingTx.id, amount: expectedAmount });
+        } else {
+          // Eğer birden fazla kopya faiz oluşmuşsa ilkini asıl kabul et, diğerlerini temizle.
+          const primary = existingUnitPenalties[0];
+          if (primary.amount !== expectedAmount) {
+            toUpdate.push({ id: primary.id, amount: expectedAmount });
+          }
+          for (let i = 1; i < existingUnitPenalties.length; i++) {
+            toDelete.push({ id: existingUnitPenalties[i].id, type: 'penalty' });
+          }
         }
       } else {
-        if (existingTx) {
-          // Ödeme sonradan girilmiş ve aslında faiz işlememesi gerekiyormuş, mevcut faizi sil!
-          toDelete.push({ id: existingTx.id, type: 'penalty' });
+        if (existingUnitPenalties.length > 0) {
+          // Ödeme sonradan girilmişse veya veritabanında kopya kayıtlar kalmışsa HEPSİNİ sil.
+          existingUnitPenalties.forEach(tx => toDelete.push({ id: tx.id, type: 'penalty' }));
         }
       }
     });
