@@ -2116,7 +2116,7 @@ function AdminReport({ computations, transactions }) {
 }
 
 function AdminAssembly({ units, computations, transactions, settings }) {
-  const [docType, setDocType] = useState('butce'); 
+  const [docType, setDocType] = useState('bilanco'); 
   const [meetingType, setMeetingType] = useState('olagan'); 
   const [meetingDate, setMeetingDate] = useState('');
   const [meetingTime, setMeetingTime] = useState('14:00');
@@ -2132,6 +2132,10 @@ function AdminAssembly({ units, computations, transactions, settings }) {
   const [newYonetim, setNewYonetim] = useState('');
   const [customDenetim, setCustomDenetim] = useState([]);
   const [newDenetim, setNewDenetim] = useState('');
+
+  // Bilanço İçin State'ler
+  const [bilancoStartDate, setBilancoStartDate] = useState('');
+  const [bilancoEndDate, setBilancoEndDate] = useState('');
 
   const addCustomAgenda = () => { if(newAgenda.trim()) { setCustomAgenda([...customAgenda, newAgenda.trim()]); setNewAgenda(''); } };
   const removeCustomAgenda = (idx) => { setCustomAgenda(customAgenda.filter((_, i) => i !== idx)); };
@@ -2258,6 +2262,7 @@ function AdminAssembly({ units, computations, transactions, settings }) {
 
         <div className="flex flex-wrap justify-between items-center gap-4">
           <div className="flex flex-wrap gap-2">
+            <button onClick={() => setDocType('bilanco')} className={`px-4 py-2 rounded-lg font-medium transition-colors ${docType === 'bilanco' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Gelir-Gider Tablosu</button>
             <button onClick={() => setDocType('butce')} className={`px-4 py-2 rounded-lg font-medium transition-colors ${docType === 'butce' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>İşletme Projesi (Bütçe)</button>
             <button onClick={() => setDocType('cagri')} className={`px-4 py-2 rounded-lg font-medium transition-colors ${docType === 'cagri' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Çağrı Dilekçesi</button>
             <button onClick={() => setDocType('hazirun')} className={`px-4 py-2 rounded-lg font-medium transition-colors ${docType === 'hazirun' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Hazirun Listesi</button>
@@ -2268,6 +2273,18 @@ function AdminAssembly({ units, computations, transactions, settings }) {
           <button onClick={() => handlePrint('printable-assembly-doc', 'Genel_Kurul_Evraklari')} className="bg-slate-800 hover:bg-slate-900 text-white px-6 py-2 rounded-lg flex items-center shadow-sm transition-colors font-medium"><Printer size={18} className="mr-2" /> Belgeyi PDF İndir</button>
         </div>
       </div>
+
+      {docType === 'bilanco' && (
+        <div className="bg-slate-50 p-5 rounded-xl border border-slate-200 mb-6 no-print flex flex-col sm:flex-row gap-4 items-center">
+            <h3 className="font-semibold text-slate-700 flex items-center whitespace-nowrap"><Filter size={18} className="mr-2"/> Rapor Tarih Aralığı:</h3>
+            <div className="flex gap-2 items-center w-full sm:w-auto bg-white border border-slate-300 px-3 py-2 rounded-lg">
+                <input type="date" className="outline-none text-sm font-medium bg-transparent w-full sm:w-auto" value={bilancoStartDate} onChange={e => setBilancoStartDate(e.target.value)} title="Başlangıç Tarihi" />
+                <span className="text-slate-400 font-bold">-</span>
+                <input type="date" className="outline-none text-sm font-medium bg-transparent w-full sm:w-auto" value={bilancoEndDate} onChange={e => setBilancoEndDate(e.target.value)} title="Bitiş Tarihi" />
+            </div>
+            <p className="text-xs text-slate-500 sm:ml-4">Belirli bir dönemi süzmek için tarih seçin. Geçmiş bakiye otomatik hesaplanarak devreder.</p>
+        </div>
+      )}
 
       {docType === 'butce' && (
         <div className="bg-emerald-50 p-6 rounded-xl border border-emerald-100 no-print animate-in fade-in">
@@ -2367,6 +2384,143 @@ function AdminAssembly({ units, computations, transactions, settings }) {
 
       <div className="bg-white p-10 rounded-xl shadow-sm border border-slate-200" id="printable-assembly-doc">
         
+        {docType === 'bilanco' && (() => {
+           // Bilanço Hesaplamaları
+           let devredenGiris = 0;
+           let devredenCikis = 0;
+           let donemGiris = 0;
+           let donemCikis = 0;
+
+           const incomeByCategory = {};
+           const expenseByCategory = {};
+
+           transactions.forEach(t => {
+               if (t.type === 'system_marker' || t.type === 'due' || t.type === 'fixture' || t.type === 'extra' || t.type === 'custom' || t.type === 'penalty') return;
+               
+               let isPast = false;
+               if (bilancoStartDate) {
+                   const tDate = new Date(t.date); tDate.setHours(0, 0, 0, 0);
+                   const sDate = new Date(bilancoStartDate); sDate.setHours(0, 0, 0, 0);
+                   if (tDate < sDate) isPast = true;
+               }
+
+               if (bilancoEndDate && !isPast) {
+                   const tDate = new Date(t.date); tDate.setHours(0, 0, 0, 0);
+                   const eDate = new Date(bilancoEndDate); eDate.setHours(23, 59, 59, 999);
+                   if (tDate > eDate) return; 
+               }
+
+               if (isPast) {
+                   if (t.type === 'payment' || t.type === 'income') devredenGiris += t.amount;
+                   if (t.type === 'expense') devredenCikis += t.amount;
+               } else {
+                   if (t.type === 'payment') {
+                       donemGiris += t.amount;
+                       incomeByCategory['Aidat ve Gecikme Zammı Tahsilatları'] = (incomeByCategory['Aidat ve Gecikme Zammı Tahsilatları'] || 0) + t.amount;
+                   }
+                   if (t.type === 'income') {
+                       donemGiris += t.amount;
+                       incomeByCategory[t.category || 'Diğer Gelir'] = (incomeByCategory[t.category || 'Diğer Gelir'] || 0) + t.amount;
+                   }
+                   if (t.type === 'expense') {
+                       donemCikis += t.amount;
+                       expenseByCategory[t.category || 'Diğer'] = (expenseByCategory[t.category || 'Diğer'] || 0) + t.amount;
+                   }
+               }
+           });
+
+           const devredenBakiye = devredenGiris - devredenCikis;
+           const toplamGirisDahil = devredenBakiye + donemGiris;
+           const finalBakiye = toplamGirisDahil - donemCikis;
+
+           return (
+             <div className="text-slate-900 leading-relaxed text-sm">
+                <h1 className="text-2xl font-bold text-center mb-6 uppercase tracking-wide border-b-2 border-black pb-4">Yükseller Apartmanı<br/>Gelir-Gider Tablosu (Bilanço)</h1>
+                <div className="flex justify-between font-medium mb-6 text-slate-700">
+                  <p><strong>Dönem:</strong> {bilancoStartDate ? new Date(bilancoStartDate).toLocaleDateString('tr-TR') : 'Sistem Başlangıcı'} - {bilancoEndDate ? new Date(bilancoEndDate).toLocaleDateString('tr-TR') : 'Bugün'}</p>
+                  <p><strong>Rapor Tarihi:</strong> {new Date().toLocaleDateString('tr-TR')}</p>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+                  <div>
+                    <h3 className="font-bold text-lg mb-2 text-emerald-800 border-b border-emerald-800 pb-1">GELİRLER</h3>
+                    <table className="w-full text-left border-collapse border border-slate-300 mb-2">
+                        <tbody>
+                          {Object.entries(incomeByCategory).sort((a,b) => b[1]-a[1]).map(([cat, amount]) => (
+                            <tr key={cat} className="border-b border-slate-200">
+                                <td className="p-2 border-r border-slate-300">{cat}</td>
+                                <td className="p-2 text-right font-medium">{amount.toLocaleString('tr-TR')} TL</td>
+                            </tr>
+                          ))}
+                          {Object.keys(incomeByCategory).length === 0 && <tr><td colSpan="2" className="p-2 text-center text-slate-500">Dönem içi gelir bulunamadı.</td></tr>}
+                        </tbody>
+                        <tfoot>
+                          <tr className="bg-emerald-50">
+                            <td className="p-2 border-r border-slate-300 font-bold text-emerald-900">DÖNEM İÇİ TOPLAM GELİR</td>
+                            <td className="p-2 text-right font-bold text-emerald-900">{donemGiris.toLocaleString('tr-TR')} TL</td>
+                          </tr>
+                        </tfoot>
+                    </table>
+                  </div>
+
+                  <div>
+                    <h3 className="font-bold text-lg mb-2 text-red-800 border-b border-red-800 pb-1">GİDERLER</h3>
+                    <table className="w-full text-left border-collapse border border-slate-300 mb-2">
+                        <tbody>
+                          {Object.entries(expenseByCategory).sort((a,b) => b[1]-a[1]).map(([cat, amount]) => (
+                            <tr key={cat} className="border-b border-slate-200">
+                                <td className="p-2 border-r border-slate-300">{cat}</td>
+                                <td className="p-2 text-right font-medium">{amount.toLocaleString('tr-TR')} TL</td>
+                            </tr>
+                          ))}
+                          {Object.keys(expenseByCategory).length === 0 && <tr><td colSpan="2" className="p-2 text-center text-slate-500">Dönem içi gider bulunamadı.</td></tr>}
+                        </tbody>
+                        <tfoot>
+                          <tr className="bg-red-50">
+                            <td className="p-2 border-r border-slate-300 font-bold text-red-900">DÖNEM İÇİ TOPLAM GİDER</td>
+                            <td className="p-2 text-right font-bold text-red-900">{donemCikis.toLocaleString('tr-TR')} TL</td>
+                          </tr>
+                        </tfoot>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="w-full sm:w-2/3 mx-auto">
+                    <h3 className="font-bold text-lg mb-2 text-slate-800 border-b border-slate-800 pb-1 text-center">BİLANÇO ÖZETİ</h3>
+                    <table className="w-full text-left border-collapse border-2 border-slate-800">
+                        <tbody>
+                          <tr>
+                             <td className="p-3 border-b border-r border-slate-300 font-medium">Önceki Dönemden Devreden Kasa:</td>
+                             <td className="p-3 border-b border-slate-300 text-right font-bold">{devredenBakiye.toLocaleString('tr-TR')} TL</td>
+                          </tr>
+                          <tr>
+                             <td className="p-3 border-b border-r border-slate-300 font-medium text-emerald-700">Dönem İçi Toplam Gelir (+):</td>
+                             <td className="p-3 border-b border-slate-300 text-right font-bold text-emerald-700">{donemGiris.toLocaleString('tr-TR')} TL</td>
+                          </tr>
+                          <tr className="bg-slate-100">
+                             <td className="p-3 border-b border-r border-slate-300 font-bold">TOPLAM KASA GİRİŞİ (Devir + Gelir):</td>
+                             <td className="p-3 border-b border-slate-300 text-right font-bold">{toplamGirisDahil.toLocaleString('tr-TR')} TL</td>
+                          </tr>
+                          <tr>
+                             <td className="p-3 border-b border-r border-slate-300 font-medium text-red-700">Dönem İçi Toplam Gider (-):</td>
+                             <td className="p-3 border-b border-slate-300 text-right font-bold text-red-700">{donemCikis.toLocaleString('tr-TR')} TL</td>
+                          </tr>
+                          <tr className="bg-slate-800 text-white">
+                             <td className="p-3 border-r border-slate-600 font-bold text-lg">DÖNEM SONU KASA / BANKA MEVCUDU:</td>
+                             <td className="p-3 text-right font-bold text-lg">{finalBakiye.toLocaleString('tr-TR')} TL</td>
+                          </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div className="mt-16 pt-8 flex justify-between px-8 text-center">
+                  <div><p className="font-bold mb-8">Yönetim Kurulu</p><p className="border-t border-slate-400 pt-2 w-48 mx-auto">(İmza)</p></div>
+                  <div><p className="font-bold mb-8">Denetim Kurulu</p><p className="border-t border-slate-400 pt-2 w-48 mx-auto">(İmza)</p></div>
+                </div>
+             </div>
+           );
+        })()}
+
         {docType === 'butce' && (
           <div className="text-slate-900 leading-relaxed text-justify">
              <h1 className="text-xl font-bold text-center mb-8 uppercase tracking-wide border-b-2 border-black pb-4">Yükseller Apartmanı Yeni Dönem<br/>Tahmini İşletme Projesi (Bütçe)</h1>
@@ -2755,3 +2909,11 @@ function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransactio
     </div>
   );
 }
+```eof
+
+### Neler Değişti?
+* **"Genel Kurul & Bütçe"** sekmesine girdiğinizde, evrak düğmelerinin en başına **"Gelir-Gider Tablosu"** düğmesi eklendi. (Girdiğinizde varsayılan olarak o açılacak).
+* **Tarih Aralığı Filtresi:** Raporlamak istediğiniz dönemin başlangıç ve bitiş tarihlerini seçebileceksiniz.
+* **Akıllı Bilanço Mantığı:** Seçtiğiniz tarihlerden *önceki* tüm işlemleri tarayarak devreden Kasa/Banka bakiyesini hesaplar ve bunu listenin en başına "Önceki Dönemden Devreden Kasa" olarak yazar.
+* **Gelirler ve Giderler Bölümü:** Aidat tahsilatları ile **Banka Faiz Geliri** gibi diğer gelirleri alt alta bir sütunda, tüm gider kategorilerini ise diğer sütunda özetleyerek toplar. 
+* Alt kısma, tüm giriş-çıkışların hesaplanarak denkleştirildiği, Genel Kurul yetkililerinin (Yönetim / Denetim Kurulları) doğrudan altına imza atabileceği hazır bir mizan eklenmiştir. Tamamen PDF indirilip yazdırılmaya hazır!
