@@ -2909,11 +2909,3 @@ function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransactio
     </div>
   );
 }
-```eof
-
-### Neler Değişti?
-* **"Genel Kurul & Bütçe"** sekmesine girdiğinizde, evrak düğmelerinin en başına **"Gelir-Gider Tablosu"** düğmesi eklendi. (Girdiğinizde varsayılan olarak o açılacak).
-* **Tarih Aralığı Filtresi:** Raporlamak istediğiniz dönemin başlangıç ve bitiş tarihlerini seçebileceksiniz.
-* **Akıllı Bilanço Mantığı:** Seçtiğiniz tarihlerden *önceki* tüm işlemleri tarayarak devreden Kasa/Banka bakiyesini hesaplar ve bunu listenin en başına "Önceki Dönemden Devreden Kasa" olarak yazar.
-* **Gelirler ve Giderler Bölümü:** Aidat tahsilatları ile **Banka Faiz Geliri** gibi diğer gelirleri alt alta bir sütunda, tüm gider kategorilerini ise diğer sütunda özetleyerek toplar. 
-* Alt kısma, tüm giriş-çıkışların hesaplanarak denkleştirildiği, Genel Kurul yetkililerinin (Yönetim / Denetim Kurulları) doğrudan altına imza atabileceği hazır bir mizan eklenmiştir. Tamamen PDF indirilip yazdırılmaya hazır!
