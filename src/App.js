@@ -182,12 +182,11 @@ const getBalances = (txs, units) => {
 const runAutoPenalties = (currentTransactions, currentUnits) => {
   if (currentTransactions.length === 0) return { toCreate: [], toUpdate: [], toDelete: [] };
   
-  // DÜZELTME: Hesaplamaları yaparken geçmiş aylarda oluşan faizleri simülasyonda tutabilmek için 
-  // ana işlemleri bir "runningTxs" dizisine alıyoruz. Otomatik faizleri buradan temizleyip 
-  // döngü içinde sıfırdan ileriye dönük inşa edeceğiz.
-  let runningTxs = currentTransactions.filter(t => !(t.groupId && t.groupId.startsWith('auto-penalty-')));
-
-  const sortedTxs = [...currentTransactions].sort((a, b) => new Date(a.date) - new Date(b.date));
+  // HATA DÜZELTMESİ: Sistem geçmiş ayları hesaplarken, yeni bulduğu faizleri 
+  // workingTransactions (hafıza) listesine ekler ki zincirleme sonsuz döngü yaşanmasın.
+  let workingTransactions = [...currentTransactions];
+  
+  const sortedTxs = [...workingTransactions].sort((a, b) => new Date(a.date) - new Date(b.date));
   const earliestDate = new Date(sortedTxs[0].date);
   const now = new Date();
   
@@ -199,18 +198,21 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
   while (checkDate <= now) {
     const year = checkDate.getFullYear();
     const month = String(checkDate.getMonth() + 1).padStart(2, '0');
-    const groupId = `auto-penalty-${year}-${month}`;
+    const groupId = `auto-penalty-\({year}-\){month}`;
     const penaltyApplicationDate = new Date(year, checkDate.getMonth(), 5, 12, 0, 0);
     
     if (penaltyApplicationDate > now) break;
 
-    // Artık runningTxs üzerinden simülasyon yapıyoruz
-    const pastTxs = runningTxs.filter(t => new Date(t.date) <= penaltyApplicationDate);
+    // currentTransactions YERİNE workingTransactions (Güncel Hafıza) KULLANILIYOR
+    const pastTxs = workingTransactions.filter(t => 
+        new Date(t.date) <= penaltyApplicationDate && 
+        t.groupId !== groupId
+    );
     
     const { unitBalances } = getBalances(pastTxs, currentUnits);
     
-    const existingPenalties = currentTransactions.filter(t => t.groupId === groupId && t.type === 'penalty');
-    const existingMarkers = currentTransactions.filter(t => t.groupId === groupId && t.type === 'system_marker');
+    const existingPenalties = workingTransactions.filter(t => t.groupId === groupId && t.type === 'penalty');
+    const existingMarkers = workingTransactions.filter(t => t.groupId === groupId && t.type === 'system_marker');
     
     let monthHasPenalty = false;
     
@@ -219,51 +221,66 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
       const principal = (b.dueBalance || 0) + (b.fixtureBalance || 0) + (b.extraBalance || 0) + (b.customBalance || 0);
       
       const expectedAmount = principal >= 1 ? Number((principal * 0.05).toFixed(2)) : 0;
-      
       const existingUnitPenalties = existingPenalties.filter(t => t.unitId === unit.id);
       
       if (expectedAmount > 0) {
         monthHasPenalty = true;
-
-        // DÜZELTME: Bulduğumuz faiz tutarını mutlaka runningTxs'e (simülasyona) ekliyoruz ki,
-        // bir sonraki ayın döngüsü getBalances çalıştırdığında BK Md. 84'e göre ödemeyi önce bu faizden düşsün!
-        runningTxs.push({
-          id: `sim-${groupId}-${unit.id}`,
-          date: penaltyApplicationDate.toISOString(),
-          type: 'penalty',
-          amount: expectedAmount,
-          unitId: unit.id,
-          groupId: groupId
-        });
-
         if (existingUnitPenalties.length === 0) {
-          toCreate.push({ date: penaltyApplicationDate.toISOString(), type: 'penalty', amount: expectedAmount, unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, groupId: groupId });
+          // Yeni faiz oluşturuluyor ve HEMEN hafızadaki listeye (workingTransactions) ekleniyor
+          const newPenalty = { 
+              id: `temp-\({Date.now()}-\){Math.random()}`, 
+              date: penaltyApplicationDate.toISOString(), 
+              type: 'penalty', 
+              amount: expectedAmount, 
+              unitId: unit.id, 
+              description: `Oto. Gecikme Tazminatı (%5) - \({month}/\){year}`, 
+              groupId: groupId 
+          };
+          toCreate.push(newPenalty);
+          workingTransactions.push(newPenalty); 
         } else {
           const primary = existingUnitPenalties[0];
           if (primary.amount !== expectedAmount) {
             toUpdate.push({ id: primary.id, amount: expectedAmount });
+            // Hafızadaki eski değeri güncelle
+            const idx = workingTransactions.findIndex(t => t.id === primary.id);
+            if (idx !== -1) workingTransactions[idx].amount = expectedAmount;
           }
           for (let i = 1; i < existingUnitPenalties.length; i++) {
             toDelete.push({ id: existingUnitPenalties[i].id, type: 'penalty' });
+            workingTransactions = workingTransactions.filter(t => t.id !== existingUnitPenalties[i].id);
           }
         }
       } else {
         if (existingUnitPenalties.length > 0) {
-          existingUnitPenalties.forEach(tx => toDelete.push({ id: tx.id, type: 'penalty' }));
+          existingUnitPenalties.forEach(tx => {
+              toDelete.push({ id: tx.id, type: 'penalty' });
+              workingTransactions = workingTransactions.filter(t => t.id !== tx.id);
+          });
         }
       }
     });
     
     const existingMarker = existingMarkers[0];
     if (!monthHasPenalty && !existingMarker && existingPenalties.length === 0) {
-       toCreate.push({ date: penaltyApplicationDate.toISOString(), type: 'system_marker', amount: 0, unitId: null, description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) - ${month}/${year}`, groupId: groupId });
+       const newMarker = { id: `temp-marker-\({Date.now()}`, date: penaltyApplicationDate.toISOString(), type: 'system_marker', amount: 0, unitId: null, description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) -\){month}/${year}`, groupId: groupId };
+       toCreate.push(newMarker);
+       workingTransactions.push(newMarker);
     } else if (monthHasPenalty && existingMarker) {
        toDelete.push({ id: existingMarker.id, type: 'system_marker' });
+       workingTransactions = workingTransactions.filter(t => t.id !== existingMarker.id);
     }
 
     checkDate = new Date(year, checkDate.getMonth() + 1, 1);
   }
-  return { toCreate, toUpdate, toDelete };
+  
+  // Buluta yüklenmeden önce geçici ID'leri temizle (Firebase kendi ID'sini versin)
+  const cleanToCreate = toCreate.map(tx => {
+      const { id, ...rest } = tx;
+      return rest;
+  });
+
+  return { toCreate: cleanToCreate, toUpdate, toDelete };
 };
 
 const runAutoReminders = (currentTransactions, currentUnits) => {
