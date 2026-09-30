@@ -86,7 +86,7 @@ const appReducer = (state, action) => {
       const { groupId, user } = action.payload;
       return {
         ...state,
-        sysLogs: [createLog('SİLME (TOPLU)', `Bir işlem grubu (grup ID: ${groupId}) ve içerdiği tüm kayıtlar silindi.`, user), ...state.sysLogs]
+        sysLogs: [createLog('SİLME (TOPLU)', `Bir işlem grubu ve içerdiği tüm kayıtlar silindi.`, user), ...state.sysLogs]
       };
     }
     case 'EDIT_TRANSACTION': {
@@ -121,7 +121,6 @@ const appReducer = (state, action) => {
         sysLogs: [createLog('AYAR GÜNCELLEME', `Sistem bütçe ve maaş parametreleri güncellendi.`, user), ...state.sysLogs]
       };
     }
-    case 'ADD_AUTO_TRANSACTIONS': return state; 
     default: return state;
   }
 };
@@ -139,39 +138,92 @@ const handlePrint = (elementId, fileName = 'Rapor') => {
   }, 150);
 };
 
+// KRONOLOJİK BAKİYE HESAPLAMA (Geçmişe dönük girişler için düzeltildi)
 const getBalances = (txs, units) => {
-  let totalKasa = 0, totalGider = 0, totalBekleyenAidat = 0, totalBekleyenFaiz = 0, totalBekleyenDemirbas = 0, totalBekleyenEkstra = 0, totalBekleyenOzel = 0; 
+  const round2 = (num) => Math.round((num + Number.EPSILON) * 100) / 100;
+  
+  let totalKasa = 0, totalGider = 0, totalBekleyenAidat = 0, totalBekleyenFaiz = 0, totalBekleyenDemirbas = 0, totalBekleyenEkstra = 0, totalBekleyenOzel = 0;
   const unitBalances = {};
 
-  units.forEach(u => unitBalances[u.id] = { due: 0, penalty: 0, payment: 0, fixture: 0, extra: 0, custom: 0, balance: 0, dueBalance: 0, penaltyBalance: 0, fixtureBalance: 0, extraBalance: 0, customBalance: 0 });
+  units.forEach(u => unitBalances[u.id] = {
+    due: 0, penalty: 0, payment: 0, fixture: 0, extra: 0, custom: 0,
+    balance: 0, dueBalance: 0, penaltyBalance: 0, fixtureBalance: 0, extraBalance: 0, customBalance: 0,
+    advancePayment: 0 
+  });
 
-  txs.forEach(t => {
-    if (t.type === 'expense') { totalGider += t.amount; totalKasa -= t.amount; }
-    else if (t.type === 'income') { totalKasa += t.amount; }
-    else if (t.type === 'payment') { totalKasa += t.amount; if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].payment += t.amount; }
-    else if (t.type === 'due') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].due += t.amount; }
-    else if (t.type === 'fixture') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].fixture += t.amount; }
-    else if (t.type === 'extra') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].extra += t.amount; }
-    else if (t.type === 'custom') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].custom += t.amount; }
-    else if (t.type === 'penalty') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].penalty += t.amount; }
+  const sortedTxs = [...txs].sort((a, b) => {
+    const dateA = new Date(a.date).getTime();
+    const dateB = new Date(b.date).getTime();
+    if (dateA !== dateB) return dateA - dateB;
+    const getWeight = (t) => ['payment', 'income'].includes(t.type) ? 1 : 0;
+    return getWeight(a) - getWeight(b);
+  });
+
+  sortedTxs.forEach(t => {
+    const amount = round2(Number(t.amount) || 0);
+    
+    if (t.type === 'expense') { 
+      totalGider = round2(totalGider + amount); 
+      totalKasa = round2(totalKasa - amount); 
+    }
+    else if (t.type === 'income') { 
+      totalKasa = round2(totalKasa + amount); 
+    }
+    else if (t.type === 'payment') {
+      totalKasa = round2(totalKasa + amount);
+      if (t.unitId && unitBalances[t.unitId]) {
+        const b = unitBalances[t.unitId];
+        b.payment = round2(b.payment + amount);
+        
+        let remaining = round2(amount + b.advancePayment);
+        b.advancePayment = 0;
+
+        if (remaining >= b.penaltyBalance) { remaining = round2(remaining - b.penaltyBalance); b.penaltyBalance = 0; }
+        else { b.penaltyBalance = round2(b.penaltyBalance - remaining); remaining = 0; }
+
+        if (remaining >= b.dueBalance) { remaining = round2(remaining - b.dueBalance); b.dueBalance = 0; }
+        else { b.dueBalance = round2(b.dueBalance - remaining); remaining = 0; }
+
+        if (remaining >= b.fixtureBalance) { remaining = round2(remaining - b.fixtureBalance); b.fixtureBalance = 0; }
+        else { b.fixtureBalance = round2(b.fixtureBalance - remaining); remaining = 0; }
+
+        if (remaining >= b.extraBalance) { remaining = round2(remaining - b.extraBalance); b.extraBalance = 0; }
+        else { b.extraBalance = round2(b.extraBalance - remaining); remaining = 0; }
+
+        if (remaining >= b.customBalance) { remaining = round2(remaining - b.customBalance); b.customBalance = 0; }
+        else { b.customBalance = round2(b.customBalance - remaining); remaining = 0; }
+
+        b.advancePayment = remaining;
+      }
+    }
+    else if (['due', 'fixture', 'extra', 'custom', 'penalty'].includes(t.type)) {
+       if (t.unitId && unitBalances[t.unitId]) {
+          const b = unitBalances[t.unitId];
+          b[t.type] = round2(b[t.type] + amount);
+          let debt = amount;
+
+          if (b.advancePayment > 0) {
+              if (b.advancePayment >= debt) { b.advancePayment = round2(b.advancePayment - debt); debt = 0; }
+              else { debt = round2(debt - b.advancePayment); b.advancePayment = 0; }
+          }
+
+          if (t.type === 'due') b.dueBalance = round2(b.dueBalance + debt);
+          else if (t.type === 'fixture') b.fixtureBalance = round2(b.fixtureBalance + debt);
+          else if (t.type === 'extra') b.extraBalance = round2(b.extraBalance + debt);
+          else if (t.type === 'custom') b.customBalance = round2(b.customBalance + debt);
+          else if (t.type === 'penalty') b.penaltyBalance = round2(b.penaltyBalance + debt);
+       }
+    }
   });
 
   Object.values(unitBalances).forEach(details => {
-    let remainingPayment = details.payment;
-    
-    if (remainingPayment >= details.penalty) { details.penaltyBalance = 0; remainingPayment -= details.penalty; } else { details.penaltyBalance = details.penalty - remainingPayment; remainingPayment = 0; }
-    if (remainingPayment >= details.due) { details.dueBalance = 0; remainingPayment -= details.due; } else { details.dueBalance = details.due - remainingPayment; remainingPayment = 0; }
-    if (remainingPayment >= details.fixture) { details.fixtureBalance = 0; remainingPayment -= details.fixture; } else { details.fixtureBalance = details.fixture - remainingPayment; remainingPayment = 0; }
-    if (remainingPayment >= details.extra) { details.extraBalance = 0; remainingPayment -= details.extra; } else { details.extraBalance = details.extra - remainingPayment; remainingPayment = 0; }
-    if (remainingPayment >= details.custom) { details.customBalance = 0; remainingPayment -= details.custom; } else { details.customBalance = details.custom - remainingPayment; remainingPayment = 0; }
+     details.balance = round2(details.dueBalance + details.fixtureBalance + details.extraBalance + details.customBalance + details.penaltyBalance - details.advancePayment);
 
-    details.balance = details.dueBalance + details.fixtureBalance + details.extraBalance + details.customBalance + details.penaltyBalance - remainingPayment;
-
-    if (details.dueBalance > 0) totalBekleyenAidat += details.dueBalance;
-    if (details.fixtureBalance > 0) totalBekleyenDemirbas += details.fixtureBalance;
-    if (details.extraBalance > 0) totalBekleyenEkstra += details.extraBalance;
-    if (details.customBalance > 0) totalBekleyenOzel += details.customBalance;
-    if (details.penaltyBalance > 0) totalBekleyenFaiz += details.penaltyBalance;
+     if (details.dueBalance > 0) totalBekleyenAidat = round2(totalBekleyenAidat + details.dueBalance);
+     if (details.fixtureBalance > 0) totalBekleyenDemirbas = round2(totalBekleyenDemirbas + details.fixtureBalance);
+     if (details.extraBalance > 0) totalBekleyenEkstra = round2(totalBekleyenEkstra + details.extraBalance);
+     if (details.customBalance > 0) totalBekleyenOzel = round2(totalBekleyenOzel + details.customBalance);
+     if (details.penaltyBalance > 0) totalBekleyenFaiz = round2(totalBekleyenFaiz + details.penaltyBalance);
   });
 
   return { totalKasa, totalGider, totalBekleyenAidat, totalBekleyenDemirbas, totalBekleyenEkstra, totalBekleyenOzel, totalBekleyenFaiz, unitBalances };
@@ -230,7 +282,7 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
           simulatedTransactions.push(newPenalty);
         } else {
           const primary = existingUnitPenalties[0];
-          const isDateWrong = new Date(primary.date).getTime() !== penaltyApplicationDate.getTime();
+          const isDateWrong = new Date(primary.date).toISOString() !== penaltyApplicationDate.toISOString();
           const isDescWrong = primary.description !== expectedDesc;
 
           if (primary.amount !== expectedAmount || isDateWrong || isDescWrong) {
@@ -264,7 +316,7 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
        toDelete.push({ id: existingMarker.id, type: 'system_marker' });
        simulatedTransactions = simulatedTransactions.filter(t => t.id !== existingMarker.id);
     } else if (!monthHasPenalty && existingMarker) {
-       const isDateWrong = new Date(existingMarker.date).getTime() !== penaltyApplicationDate.getTime();
+       const isDateWrong = new Date(existingMarker.date).toISOString() !== penaltyApplicationDate.toISOString();
        const isDescWrong = existingMarker.description !== expectedMarkerDesc;
        if (isDateWrong || isDescWrong) {
            toUpdate.push({ id: existingMarker.id, date: isoDate, description: expectedMarkerDesc });
@@ -404,7 +456,7 @@ export default function App() {
                
                if (penaltyCreated > 0) msgs.push(`${penaltyCreated} yeni faiz`);
                if (penaltyUpdated > 0) msgs.push(`${penaltyUpdated} faiz/tarih düzeltildi`);
-               if (penaltyDeleted > 0) msgs.push(`Geçmiş ödeme tespit edildi, ${penaltyDeleted} faiz iptal`);
+               if (penaltyDeleted > 0) msgs.push(`Geçmiş hata/ödeme tespit edildi, ${penaltyDeleted} faiz iptal`);
                
                if (msgs.length > 0) {
                  setAutoToast(`Sistem Oto-Mutabakat: ${msgs.join(' | ')}.`);
@@ -873,7 +925,6 @@ function AdminSettings({ settings, onUpdateSettings }) {
     </div>
   );
 }
-
 function AdminOverview({ computations, allTransactions, units }) {
   const { totalKasa, totalGider, totalBekleyenAidat, totalBekleyenDemirbas, totalBekleyenEkstra, totalBekleyenOzel, totalBekleyenFaiz, unitBalances } = computations;
   const totalBekleyenTumu = totalBekleyenAidat + totalBekleyenDemirbas + totalBekleyenEkstra + totalBekleyenOzel + totalBekleyenFaiz;
