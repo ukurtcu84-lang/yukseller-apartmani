@@ -3,8 +3,8 @@ import {
   Building, Store, Home, Users, Wallet, TrendingUp, TrendingDown, 
   LogOut, Plus, FileText, CheckCircle, AlertCircle, Edit, Phone, User, 
   PieChart, Tag, Percent, History, Printer, BookOpen, ClipboardList, 
-  Upload, Trash2, List, ChevronDown, ChevronUp, PlusCircle, X, Cpu,
-  Search, Filter, Lock, Calculator, Settings
+  Upload, Trash2, List, ChevronDown, ChevronUp, PlusCircle, X, Undo, Cpu,
+  Search, Filter, Lock, Calculator, Settings, Info, MessageCircle
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
@@ -121,6 +121,7 @@ const appReducer = (state, action) => {
         sysLogs: [createLog('AYAR GÜNCELLEME', `Sistem bütçe ve maaş parametreleri güncellendi.`, user), ...state.sysLogs]
       };
     }
+    case 'ADD_AUTO_TRANSACTIONS': return state; 
     default: return state;
   }
 };
@@ -180,7 +181,13 @@ const getBalances = (txs, units) => {
 
 const runAutoPenalties = (currentTransactions, currentUnits) => {
   if (currentTransactions.length === 0) return { toCreate: [], toUpdate: [], toDelete: [] };
-  const sortedTxs = [...currentTransactions].sort((a, b) => new Date(a.date) - new Date(b.date));
+  
+  // HATA DÜZELTMESİ: Sabit olan currentTransactions yerine, döngü içinde eşzamanlı güncellenen 
+  // "sanal" bir veritabanı kopyası (virtualTransactions) oluşturuyoruz.
+  // Bu sayede, örneğin Mart ayında bulunan yeni ceza, Nisan ayı hesaplanırken anında hesaba katılabiliyor.
+  let virtualTransactions = [...currentTransactions];
+  
+  const sortedTxs = [...virtualTransactions].sort((a, b) => new Date(a.date) - new Date(b.date));
   const earliestDate = new Date(sortedTxs[0].date);
   const now = new Date();
   
@@ -189,35 +196,25 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
   const toUpdate = [];
   const toDelete = [];
   
-  // Döngü içinde güncellenebilir bir işlem listesi kopyası oluşturuyoruz
-  let runningTransactions = [...currentTransactions];
-  
   while (checkDate <= now) {
     const year = checkDate.getFullYear();
     const month = String(checkDate.getMonth() + 1).padStart(2, '0');
     const groupId = `auto-penalty-${year}-${month}`;
     const penaltyApplicationDate = new Date(year, checkDate.getMonth(), 5, 12, 0, 0);
-    const firstDayOfMonth = new Date(year, checkDate.getMonth(), 1, 0, 0, 0);
     
     if (penaltyApplicationDate > now) break;
 
-    // Geçmiş işlemleri süzerken borçlar için "geçen ayın sonunu", ödemeler için "ayın 5'ini" baz alıyoruz
-    const pastTxs = runningTransactions.filter(t => {
-      if (t.groupId === groupId) return false;
-      
-      const tDate = new Date(t.date);
-      
-      if (t.type === 'payment' || t.type === 'income') {
-        return tDate <= penaltyApplicationDate;
-      }
-      return tDate < firstDayOfMonth; 
-    });
+    // Sabit olan currentTransactions yerine sanal listemizi (virtualTransactions) filtreliyoruz.
+    const pastTxs = virtualTransactions.filter(t => 
+        new Date(t.date) <= penaltyApplicationDate && 
+        t.groupId !== groupId
+    );
     
     const { unitBalances } = getBalances(pastTxs, currentUnits);
     
-    // Mevcut cezaları ana liste yerine güncel kopya üzerinden kontrol ediyoruz
-    const existingPenalties = runningTransactions.filter(t => t.groupId === groupId && t.type === 'penalty');
-    const existingMarkers = runningTransactions.filter(t => t.groupId === groupId && t.type === 'system_marker');
+    // Yine sanal listemizi baz alıyoruz.
+    const existingPenalties = virtualTransactions.filter(t => t.groupId === groupId && t.type === 'penalty');
+    const existingMarkers = virtualTransactions.filter(t => t.groupId === groupId && t.type === 'system_marker');
     
     let monthHasPenalty = false;
     
@@ -226,34 +223,38 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
       const principal = (b.dueBalance || 0) + (b.fixtureBalance || 0) + (b.extraBalance || 0) + (b.customBalance || 0);
       
       const expectedAmount = principal >= 1 ? Number((principal * 0.05).toFixed(2)) : 0;
-      
       const existingUnitPenalties = existingPenalties.filter(t => t.unitId === unit.id);
       
       if (expectedAmount > 0) {
         monthHasPenalty = true;
         if (existingUnitPenalties.length === 0) {
-          const fakeId = `new-penalty-${Date.now()}-${Math.random()}`;
+          // Faiz hiç yazılmamış, oluştur
           const newTx = { date: penaltyApplicationDate.toISOString(), type: 'penalty', amount: expectedAmount, unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, groupId: groupId };
-          
-          toCreate.push(newTx); 
-          runningTransactions.push({ ...newTx, id: fakeId }); // Sonraki ayı doğru etkilemesi için faizi kopyaya ekliyoruz
+          toCreate.push(newTx);
+          // İlgili ayı işlerken yeni bulduğumuz faizi, SONRAKİ ayların hesaplamasında kullanılması için SANAL LİSTEYE de ekliyoruz!
+          virtualTransactions.push({ ...newTx, id: `temp-create-${Date.now()}-${Math.random()}` });
         } else {
+          // Eğer birden fazla kopya faiz oluşmuşsa ilkini asıl kabul et, diğerlerini temizle.
           const primary = existingUnitPenalties[0];
           if (primary.amount !== expectedAmount) {
             toUpdate.push({ id: primary.id, amount: expectedAmount });
-            const idx = runningTransactions.findIndex(t => t.id === primary.id);
-            if(idx !== -1) runningTransactions[idx] = { ...runningTransactions[idx], amount: expectedAmount };
+            // Değişikliği SANAL LİSTEDE DE anında uyguluyoruz.
+            const idx = virtualTransactions.findIndex(t => t.id === primary.id);
+            if (idx > -1) virtualTransactions[idx] = { ...virtualTransactions[idx], amount: expectedAmount };
           }
           for (let i = 1; i < existingUnitPenalties.length; i++) {
             toDelete.push({ id: existingUnitPenalties[i].id, type: 'penalty' });
-            runningTransactions = runningTransactions.filter(t => t.id !== existingUnitPenalties[i].id);
+            // Silinen hatalı kopyayı SANAL LİSTEDEN DE siliyoruz.
+            virtualTransactions = virtualTransactions.filter(t => t.id !== existingUnitPenalties[i].id);
           }
         }
       } else {
         if (existingUnitPenalties.length > 0) {
+          // Ödeme sonradan girilmişse veya veritabanında kopya kayıtlar kalmışsa HEPSİNİ sil.
           existingUnitPenalties.forEach(tx => {
             toDelete.push({ id: tx.id, type: 'penalty' });
-            runningTransactions = runningTransactions.filter(t => t.id !== tx.id);
+            // SANAL LİSTEDEN DE SİLİYORUZ ki ödeme hesaplamaları sapmasın.
+            virtualTransactions = virtualTransactions.filter(t => t.id !== tx.id);
           });
         }
       }
@@ -261,14 +262,12 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
     
     const existingMarker = existingMarkers[0];
     if (!monthHasPenalty && !existingMarker && existingPenalties.length === 0) {
-       const fakeId = `new-marker-${Date.now()}-${Math.random()}`;
        const newMarker = { date: penaltyApplicationDate.toISOString(), type: 'system_marker', amount: 0, unitId: null, description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) - ${month}/${year}`, groupId: groupId };
-       
        toCreate.push(newMarker);
-       runningTransactions.push({ ...newMarker, id: fakeId });
+       virtualTransactions.push({ ...newMarker, id: `temp-marker-${Date.now()}` });
     } else if (monthHasPenalty && existingMarker) {
        toDelete.push({ id: existingMarker.id, type: 'system_marker' });
-       runningTransactions = runningTransactions.filter(t => t.id !== existingMarker.id);
+       virtualTransactions = virtualTransactions.filter(t => t.id !== existingMarker.id);
     }
 
     checkDate = new Date(year, checkDate.getMonth() + 1, 1);
@@ -377,7 +376,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    // İşlemler her değiştiğinde arka planda faizleri otomatik denetle ve saniyeler içinde düzelt
     if (currentUser === 'admin' && transactions.length > 0 && units.length > 0) {
       const timer = setTimeout(async () => {
          const { toCreate, toUpdate, toDelete } = runAutoPenalties(transactions, units);
@@ -633,7 +631,7 @@ export default function App() {
           units={units} transactions={transactions} sysLogs={sysLogs} computations={computations} lastBilledMonth={lastBilledMonth} settings={settings}
           onAddTransaction={addTransaction} onAddBulkTransactions={addBulkTransactions} onAddBulkDue={addBulkDue}
           onDeleteTransaction={deleteTransaction} onDeleteTransactionGroup={deleteTransactionGroup} onDeleteMultipleTransactions={deleteMultipleTransactions}
-          onEditTransaction={onEditTransaction} onUpdateUnit={onUpdateUnit} onUpdateBulkUnits={onUpdateBulkUnits} onUpdateSettings={onUpdateSettings} onLogout={handleLogout} 
+          onEditTransaction={onEditTransaction} onUpdateUnit={onUpdateUnit} onUpdateBulkUnits={onUpdateSettings} onUpdateSettings={onUpdateSettings} onLogout={handleLogout} 
         />
       )}
 
@@ -722,7 +720,6 @@ function LoginScreen({ onLogin, units }) {
           <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition-colors mt-2 shadow-md">Sisteme Giriş Yap</button>
         </form>
       </div>
-      
       <p className="mt-6 text-[9px] text-slate-400 font-medium uppercase tracking-widest opacity-50">
         v2.0 • Ukurtcu Management System
       </p>
@@ -1114,6 +1111,7 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
     setEditingTxId(tx.id);
     setEditTxFormData({ date: new Date(tx.date).toISOString().split('T')[0], type: tx.type, description: tx.description, amount: tx.amount });
   };
+  
   const saveEditedTx = () => {
     if (!editTxFormData.amount || !editTxFormData.description) return showMessage("Tutar ve açıklama boş bırakılamaz!", "error");
     onEditTransaction(editingTxId, { ...editTxFormData, amount: Number(editTxFormData.amount), date: new Date(editTxFormData.date).toISOString() });
@@ -2355,7 +2353,6 @@ function AdminAssembly({ units, computations, transactions, settings }) {
         </div>
       )}
 
-      {}
       {docType === 'cagri' && (
         <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 mb-6 no-print">
           <h3 className="font-semibold text-slate-700 mb-2 flex items-center"><PlusCircle size={18} className="mr-2"/> Çağrı Dilekçesine Ek Gündem Maddesi Ekle</h3>
@@ -2923,13 +2920,6 @@ function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransactio
             </div>
           </div>
         )}
-
-        {}
-        <footer className="mt-12 mb-8 text-center no-print">
-          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
-            Powered by UKURTCU
-          </p>
-        </footer>
       </div>
     </div>
   );
