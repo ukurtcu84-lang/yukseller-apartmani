@@ -3,8 +3,8 @@ import {
   Building, Store, Home, Users, Wallet, TrendingUp, TrendingDown, 
   LogOut, Plus, FileText, CheckCircle, AlertCircle, Edit, Phone, User, 
   PieChart, Tag, Percent, History, Printer, BookOpen, ClipboardList, 
-  Upload, Trash2, List, ChevronDown, ChevronUp, PlusCircle, X, Undo, Cpu,
-  Search, Filter, Lock, Calculator, Settings, Info, MessageCircle
+  Upload, Trash2, List, ChevronDown, ChevronUp, PlusCircle, X, Cpu,
+  Search, Filter, Lock, Calculator, Settings
 } from 'lucide-react';
 
 import { initializeApp } from "firebase/app";
@@ -86,7 +86,7 @@ const appReducer = (state, action) => {
       const { groupId, user } = action.payload;
       return {
         ...state,
-        sysLogs: [createLog('SİLME (TOPLU)', `Bir işlem grubu ve içerdiği tüm kayıtlar silindi.`, user), ...state.sysLogs]
+        sysLogs: [createLog('SİLME (TOPLU)', `Bir işlem grubu (grup ID: ${groupId}) ve içerdiği tüm kayıtlar silindi.`, user), ...state.sysLogs]
       };
     }
     case 'EDIT_TRANSACTION': {
@@ -138,92 +138,39 @@ const handlePrint = (elementId, fileName = 'Rapor') => {
   }, 150);
 };
 
-// KRONOLOJİK BAKİYE HESAPLAMA (Geçmişe dönük girişler için düzeltildi)
 const getBalances = (txs, units) => {
-  const round2 = (num) => Math.round((num + Number.EPSILON) * 100) / 100;
-  
-  let totalKasa = 0, totalGider = 0, totalBekleyenAidat = 0, totalBekleyenFaiz = 0, totalBekleyenDemirbas = 0, totalBekleyenEkstra = 0, totalBekleyenOzel = 0;
+  let totalKasa = 0, totalGider = 0, totalBekleyenAidat = 0, totalBekleyenFaiz = 0, totalBekleyenDemirbas = 0, totalBekleyenEkstra = 0, totalBekleyenOzel = 0; 
   const unitBalances = {};
 
-  units.forEach(u => unitBalances[u.id] = {
-    due: 0, penalty: 0, payment: 0, fixture: 0, extra: 0, custom: 0,
-    balance: 0, dueBalance: 0, penaltyBalance: 0, fixtureBalance: 0, extraBalance: 0, customBalance: 0,
-    advancePayment: 0 
-  });
+  units.forEach(u => unitBalances[u.id] = { due: 0, penalty: 0, payment: 0, fixture: 0, extra: 0, custom: 0, balance: 0, dueBalance: 0, penaltyBalance: 0, fixtureBalance: 0, extraBalance: 0, customBalance: 0 });
 
-  const sortedTxs = [...txs].sort((a, b) => {
-    const dateA = new Date(a.date).getTime();
-    const dateB = new Date(b.date).getTime();
-    if (dateA !== dateB) return dateA - dateB;
-    const getWeight = (t) => ['payment', 'income'].includes(t.type) ? 1 : 0;
-    return getWeight(a) - getWeight(b);
-  });
-
-  sortedTxs.forEach(t => {
-    const amount = round2(Number(t.amount) || 0);
-    
-    if (t.type === 'expense') { 
-      totalGider = round2(totalGider + amount); 
-      totalKasa = round2(totalKasa - amount); 
-    }
-    else if (t.type === 'income') { 
-      totalKasa = round2(totalKasa + amount); 
-    }
-    else if (t.type === 'payment') {
-      totalKasa = round2(totalKasa + amount);
-      if (t.unitId && unitBalances[t.unitId]) {
-        const b = unitBalances[t.unitId];
-        b.payment = round2(b.payment + amount);
-        
-        let remaining = round2(amount + b.advancePayment);
-        b.advancePayment = 0;
-
-        if (remaining >= b.penaltyBalance) { remaining = round2(remaining - b.penaltyBalance); b.penaltyBalance = 0; }
-        else { b.penaltyBalance = round2(b.penaltyBalance - remaining); remaining = 0; }
-
-        if (remaining >= b.dueBalance) { remaining = round2(remaining - b.dueBalance); b.dueBalance = 0; }
-        else { b.dueBalance = round2(b.dueBalance - remaining); remaining = 0; }
-
-        if (remaining >= b.fixtureBalance) { remaining = round2(remaining - b.fixtureBalance); b.fixtureBalance = 0; }
-        else { b.fixtureBalance = round2(b.fixtureBalance - remaining); remaining = 0; }
-
-        if (remaining >= b.extraBalance) { remaining = round2(remaining - b.extraBalance); b.extraBalance = 0; }
-        else { b.extraBalance = round2(b.extraBalance - remaining); remaining = 0; }
-
-        if (remaining >= b.customBalance) { remaining = round2(remaining - b.customBalance); b.customBalance = 0; }
-        else { b.customBalance = round2(b.customBalance - remaining); remaining = 0; }
-
-        b.advancePayment = remaining;
-      }
-    }
-    else if (['due', 'fixture', 'extra', 'custom', 'penalty'].includes(t.type)) {
-       if (t.unitId && unitBalances[t.unitId]) {
-          const b = unitBalances[t.unitId];
-          b[t.type] = round2(b[t.type] + amount);
-          let debt = amount;
-
-          if (b.advancePayment > 0) {
-              if (b.advancePayment >= debt) { b.advancePayment = round2(b.advancePayment - debt); debt = 0; }
-              else { debt = round2(debt - b.advancePayment); b.advancePayment = 0; }
-          }
-
-          if (t.type === 'due') b.dueBalance = round2(b.dueBalance + debt);
-          else if (t.type === 'fixture') b.fixtureBalance = round2(b.fixtureBalance + debt);
-          else if (t.type === 'extra') b.extraBalance = round2(b.extraBalance + debt);
-          else if (t.type === 'custom') b.customBalance = round2(b.customBalance + debt);
-          else if (t.type === 'penalty') b.penaltyBalance = round2(b.penaltyBalance + debt);
-       }
-    }
+  txs.forEach(t => {
+    if (t.type === 'expense') { totalGider += t.amount; totalKasa -= t.amount; }
+    else if (t.type === 'income') { totalKasa += t.amount; }
+    else if (t.type === 'payment') { totalKasa += t.amount; if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].payment += t.amount; }
+    else if (t.type === 'due') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].due += t.amount; }
+    else if (t.type === 'fixture') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].fixture += t.amount; }
+    else if (t.type === 'extra') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].extra += t.amount; }
+    else if (t.type === 'custom') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].custom += t.amount; }
+    else if (t.type === 'penalty') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].penalty += t.amount; }
   });
 
   Object.values(unitBalances).forEach(details => {
-     details.balance = round2(details.dueBalance + details.fixtureBalance + details.extraBalance + details.customBalance + details.penaltyBalance - details.advancePayment);
+    let remainingPayment = details.payment;
+    
+    if (remainingPayment >= details.penalty) { details.penaltyBalance = 0; remainingPayment -= details.penalty; } else { details.penaltyBalance = details.penalty - remainingPayment; remainingPayment = 0; }
+    if (remainingPayment >= details.due) { details.dueBalance = 0; remainingPayment -= details.due; } else { details.dueBalance = details.due - remainingPayment; remainingPayment = 0; }
+    if (remainingPayment >= details.fixture) { details.fixtureBalance = 0; remainingPayment -= details.fixture; } else { details.fixtureBalance = details.fixture - remainingPayment; remainingPayment = 0; }
+    if (remainingPayment >= details.extra) { details.extraBalance = 0; remainingPayment -= details.extra; } else { details.extraBalance = details.extra - remainingPayment; remainingPayment = 0; }
+    if (remainingPayment >= details.custom) { details.customBalance = 0; remainingPayment -= details.custom; } else { details.customBalance = details.custom - remainingPayment; remainingPayment = 0; }
 
-     if (details.dueBalance > 0) totalBekleyenAidat = round2(totalBekleyenAidat + details.dueBalance);
-     if (details.fixtureBalance > 0) totalBekleyenDemirbas = round2(totalBekleyenDemirbas + details.fixtureBalance);
-     if (details.extraBalance > 0) totalBekleyenEkstra = round2(totalBekleyenEkstra + details.extraBalance);
-     if (details.customBalance > 0) totalBekleyenOzel = round2(totalBekleyenOzel + details.customBalance);
-     if (details.penaltyBalance > 0) totalBekleyenFaiz = round2(totalBekleyenFaiz + details.penaltyBalance);
+    details.balance = details.dueBalance + details.fixtureBalance + details.extraBalance + details.customBalance + details.penaltyBalance - remainingPayment;
+
+    if (details.dueBalance > 0) totalBekleyenAidat += details.dueBalance;
+    if (details.fixtureBalance > 0) totalBekleyenDemirbas += details.fixtureBalance;
+    if (details.extraBalance > 0) totalBekleyenEkstra += details.extraBalance;
+    if (details.customBalance > 0) totalBekleyenOzel += details.customBalance;
+    if (details.penaltyBalance > 0) totalBekleyenFaiz += details.penaltyBalance;
   });
 
   return { totalKasa, totalGider, totalBekleyenAidat, totalBekleyenDemirbas, totalBekleyenEkstra, totalBekleyenOzel, totalBekleyenFaiz, unitBalances };
@@ -235,7 +182,7 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
   const earliestDate = new Date(sortedTxs[0].date);
   const now = new Date();
   
-  let checkDate = new Date(earliestDate.getFullYear(), earliestDate.getMonth(), 1);
+  let checkDate = new Date(earliestDate.getFullYear(), earliestDate.getMonth() + 1, 1);
   const toCreate = [];
   const toUpdate = [];
   const toDelete = [];
@@ -247,14 +194,11 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
     const month = String(checkDate.getMonth() + 1).padStart(2, '0');
     const groupId = `auto-penalty-${year}-${month}`;
     const penaltyApplicationDate = new Date(year, checkDate.getMonth(), 5, 12, 0, 0);
-    const isoDate = penaltyApplicationDate.toISOString();
     
     if (penaltyApplicationDate > now) break;
 
-    const endOfPreviousMonth = new Date(year, checkDate.getMonth(), 0, 23, 59, 59);
-
     const pastTxs = simulatedTransactions.filter(t => 
-        new Date(t.date) <= endOfPreviousMonth && 
+        new Date(t.date) <= penaltyApplicationDate && 
         t.groupId !== groupId
     );
     
@@ -270,25 +214,20 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
       const principal = (b.dueBalance || 0) + (b.fixtureBalance || 0) + (b.extraBalance || 0) + (b.customBalance || 0);
       
       const expectedAmount = principal >= 1 ? Number((principal * 0.05).toFixed(2)) : 0;
-      const expectedDesc = `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`;
-      
       const existingUnitPenalties = existingPenalties.filter(t => t.unitId === unit.id);
       
       if (expectedAmount > 0) {
         monthHasPenalty = true;
         if (existingUnitPenalties.length === 0) {
-          const newPenalty = { date: isoDate, type: 'penalty', amount: expectedAmount, unitId: unit.id, description: expectedDesc, groupId: groupId };
+          const newPenalty = { id: `temp-${Date.now()}-${Math.random()}`, date: penaltyApplicationDate.toISOString(), type: 'penalty', amount: expectedAmount, unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, groupId: groupId };
           toCreate.push(newPenalty);
-          simulatedTransactions.push(newPenalty);
+          simulatedTransactions.push(newPenalty); 
         } else {
           const primary = existingUnitPenalties[0];
-          const isDateWrong = new Date(primary.date).toISOString() !== penaltyApplicationDate.toISOString();
-          const isDescWrong = primary.description !== expectedDesc;
-
-          if (primary.amount !== expectedAmount || isDateWrong || isDescWrong) {
-            toUpdate.push({ id: primary.id, amount: expectedAmount, date: isoDate, description: expectedDesc });
+          if (primary.amount !== expectedAmount) {
+            toUpdate.push({ id: primary.id, amount: expectedAmount });
             const simIdx = simulatedTransactions.findIndex(t => t.id === primary.id);
-            if (simIdx !== -1) simulatedTransactions[simIdx] = { ...simulatedTransactions[simIdx], amount: expectedAmount, date: isoDate, description: expectedDesc };
+            if (simIdx !== -1) simulatedTransactions[simIdx] = { ...simulatedTransactions[simIdx], amount: expectedAmount };
           }
           for (let i = 1; i < existingUnitPenalties.length; i++) {
             toDelete.push({ id: existingUnitPenalties[i].id, type: 'penalty' });
@@ -305,27 +244,21 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
       }
     });
     
-    const expectedMarkerDesc = `Sistem Kontrolü (Faizlik Borç Bulunmadı) - ${month}/${year}`;
     const existingMarker = existingMarkers[0];
-
     if (!monthHasPenalty && !existingMarker && existingPenalties.length === 0) {
-       const newMarker = { date: isoDate, type: 'system_marker', amount: 0, unitId: null, description: expectedMarkerDesc, groupId: groupId };
+       const newMarker = { id: `temp-m-${Date.now()}`, date: penaltyApplicationDate.toISOString(), type: 'system_marker', amount: 0, unitId: null, description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) - ${month}/${year}`, groupId: groupId };
        toCreate.push(newMarker);
        simulatedTransactions.push(newMarker);
     } else if (monthHasPenalty && existingMarker) {
        toDelete.push({ id: existingMarker.id, type: 'system_marker' });
        simulatedTransactions = simulatedTransactions.filter(t => t.id !== existingMarker.id);
-    } else if (!monthHasPenalty && existingMarker) {
-       const isDateWrong = new Date(existingMarker.date).toISOString() !== penaltyApplicationDate.toISOString();
-       const isDescWrong = existingMarker.description !== expectedMarkerDesc;
-       if (isDateWrong || isDescWrong) {
-           toUpdate.push({ id: existingMarker.id, date: isoDate, description: expectedMarkerDesc });
-       }
     }
 
     checkDate = new Date(year, checkDate.getMonth() + 1, 1);
   }
-  return { toCreate, toUpdate, toDelete };
+  
+  const finalToCreate = toCreate.map(({ id, ...rest }) => rest);
+  return { toCreate: finalToCreate, toUpdate, toDelete };
 };
 
 const runAutoReminders = (currentTransactions, currentUnits) => {
@@ -439,12 +372,7 @@ export default function App() {
              const batch = writeBatch(db);
              
              toCreateAll.forEach(tx => batch.set(doc(collection(db, "transactions")), { ...tx, addedBy: 'Sistem' }));
-             toUpdate.forEach(tx => {
-                 const updateData = { amount: tx.amount };
-                 if (tx.date) updateData.date = tx.date;
-                 if (tx.description) updateData.description = tx.description;
-                 batch.update(doc(db, "transactions", tx.id), updateData);
-             });
+             toUpdate.forEach(tx => batch.update(doc(db, "transactions", tx.id), { amount: tx.amount }));
              toDelete.forEach(tx => batch.delete(doc(db, "transactions", tx.id)));
              
              try {
@@ -454,9 +382,9 @@ export default function App() {
                const penaltyDeleted = toDelete.filter(t => t.type === 'penalty').length;
                const penaltyUpdated = toUpdate.length;
                
-               if (penaltyCreated > 0) msgs.push(`${penaltyCreated} yeni faiz`);
-               if (penaltyUpdated > 0) msgs.push(`${penaltyUpdated} faiz/tarih düzeltildi`);
-               if (penaltyDeleted > 0) msgs.push(`Geçmiş hata/ödeme tespit edildi, ${penaltyDeleted} faiz iptal`);
+               if (penaltyCreated > 0) msgs.push(`${penaltyCreated} yeni faiz yansıtıldı`);
+               if (penaltyUpdated > 0) msgs.push(`${penaltyUpdated} faiz güncellendi`);
+               if (penaltyDeleted > 0) msgs.push(`Geçmiş ödeme tespit edildi, ${penaltyDeleted} faiz iptal edildi`);
                
                if (msgs.length > 0) {
                  setAutoToast(`Sistem Oto-Mutabakat: ${msgs.join(' | ')}.`);
@@ -466,7 +394,7 @@ export default function App() {
                console.error("Otomatik faiz mutabakatı yapılamadı:", e);
              }
          }
-      }, 1500); 
+      }, 2500); 
       return () => clearTimeout(timer);
     }
   }, [transactions, units, currentUser]);
@@ -478,10 +406,7 @@ export default function App() {
     return latestDue ? latestDue.description : 'Henüz borçlandırma yapılmadı';
   }, [transactions]);
 
-  const handleLogin = (userId) => {
-    setCurrentUser(userId);
-  };
-  
+  const handleLogin = (userId) => setCurrentUser(userId);
   const handleLogout = () => setCurrentUser(null);
   const getUserName = () => currentUser === 'admin' ? 'Yönetici' : currentUser;
 
@@ -823,7 +748,7 @@ function AdminDashboard({ units, transactions, sysLogs, computations, lastBilled
         <div className="flex-1">
           {activeTab === 'overview' && <AdminOverview computations={computations} allTransactions={transactions} units={units} />}
           {activeTab === 'units' && <AdminUnits units={units} unitBalances={unitBalances} lastBilledMonth={lastBilledMonth} transactions={transactions} onAddTransaction={onAddTransaction} onAddBulkTransactions={onAddBulkTransactions} onAddBulkDue={onAddBulkDue} onDeleteTransaction={onDeleteTransaction} onEditTransaction={onEditTransaction} onUpdateUnit={onUpdateUnit} onUpdateBulkUnits={onUpdateBulkUnits} />}
-          {activeTab === 'expenses' && <AdminExpenses transactions={transactions} onAddTransaction={onAddBulkTransactions} onAddBulkTransactions={onAddBulkTransactions} />}
+          {activeTab === 'expenses' && <AdminExpenses transactions={transactions} onAddTransaction={onAddTransaction} onAddBulkTransactions={onAddBulkTransactions} />}
           {activeTab === 'report' && <AdminReport computations={computations} transactions={transactions} />}
           {activeTab === 'assembly' && <AdminAssembly units={units} computations={computations} transactions={transactions} settings={settings} />}
           {activeTab === 'history' && <AdminHistoryTabs transactions={transactions} sysLogs={sysLogs} onDeleteTransaction={onDeleteTransaction} onDeleteTransactionGroup={onDeleteTransactionGroup} onDeleteMultipleTransactions={onDeleteMultipleTransactions} />}
@@ -925,6 +850,7 @@ function AdminSettings({ settings, onUpdateSettings }) {
     </div>
   );
 }
+
 function AdminOverview({ computations, allTransactions, units }) {
   const { totalKasa, totalGider, totalBekleyenAidat, totalBekleyenDemirbas, totalBekleyenEkstra, totalBekleyenOzel, totalBekleyenFaiz, unitBalances } = computations;
   const totalBekleyenTumu = totalBekleyenAidat + totalBekleyenDemirbas + totalBekleyenEkstra + totalBekleyenOzel + totalBekleyenFaiz;
@@ -1489,6 +1415,7 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
         </div>
       )}
 
+      {}
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-x-auto" id="units-print-table">
         <div className="print-only mb-6 text-center border-b-2 border-slate-800 pb-4">
           <h2 className="text-2xl font-bold uppercase tracking-wide">Yükseller Apartmanı - Daire ve Dükkan Listesi</h2>
@@ -1862,6 +1789,7 @@ function AdminExpenses({ transactions, onAddTransaction, onAddBulkTransactions }
         </div>
       )}
 
+      {}
       <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 no-print">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-lg font-bold text-slate-800">{isIncome ? "Yeni Gelir / Devir İşle (Kasa Girişi)" : "Yeni Gider İşle (Manuel Kasa Çıkışı)"}</h2>
@@ -2097,6 +2025,7 @@ function AdminHistoryTabs({ transactions, sysLogs, onDeleteTransaction, onDelete
           </>
         )}
 
+        {}
         {activeTab === 'logs' && (
           <>
             <div className="bg-indigo-50 text-indigo-800 p-4 text-sm font-medium border-b border-indigo-100 flex items-start gap-3 no-print">
@@ -2366,6 +2295,7 @@ function AdminAssembly({ units, computations, transactions, settings }) {
         </div>
       )}
 
+      {}
       {docType === 'butce' && (
         <div className="bg-emerald-50 p-6 rounded-xl border border-emerald-100 no-print animate-in fade-in">
           <div className="flex flex-col lg:flex-row justify-between lg:items-center mb-6 gap-4">
@@ -2463,6 +2393,7 @@ function AdminAssembly({ units, computations, transactions, settings }) {
 
       <div className="bg-white p-10 rounded-xl shadow-sm border border-slate-200" id="printable-assembly-doc">
         
+        {}
         {docType === 'bilanco' && (() => {
            let devredenGiris = 0;
            let devredenCikis = 0;
@@ -2485,16 +2416,20 @@ function AdminAssembly({ units, computations, transactions, settings }) {
                if (bilancoEndDate && !isPast) {
                    const tDate = new Date(t.date); tDate.setHours(0, 0, 0, 0);
                    const eDate = new Date(bilancoEndDate); eDate.setHours(23, 59, 59, 999);
-                   if (tDate > eDate) return;
+                   if (tDate > eDate) return; 
                }
 
                if (isPast) {
-                   if (t.type === 'income' || t.type === 'payment') devredenGiris += t.amount;
+                   if (t.type === 'payment' || t.type === 'income') devredenGiris += t.amount;
                    if (t.type === 'expense') devredenCikis += t.amount;
                } else {
-                   if (t.type === 'income' || t.type === 'payment') {
+                   if (t.type === 'payment') {
                        donemGiris += t.amount;
-                       if (t.type === 'income') incomeByCategory[t.category || 'Diğer'] = (incomeByCategory[t.category || 'Diğer'] || 0) + t.amount;
+                       incomeByCategory['Aidat ve Gecikme Zammı Tahsilatları'] = (incomeByCategory['Aidat ve Gecikme Zammı Tahsilatları'] || 0) + t.amount;
+                   }
+                   if (t.type === 'income') {
+                       donemGiris += t.amount;
+                       incomeByCategory[t.category || 'Diğer Gelir'] = (incomeByCategory[t.category || 'Diğer Gelir'] || 0) + t.amount;
                    }
                    if (t.type === 'expense') {
                        donemCikis += t.amount;
@@ -2503,257 +2438,284 @@ function AdminAssembly({ units, computations, transactions, settings }) {
                }
            });
 
-           const devirBakiye = devredenGiris - devredenCikis;
-           const toplamGiris = devirBakiye + donemGiris;
-           const netKasa = toplamGiris - donemCikis;
-
-           const renderTitleDate = () => {
-             if (bilancoStartDate && bilancoEndDate) return `${new Date(bilancoStartDate).toLocaleDateString('tr-TR')} - ${new Date(bilancoEndDate).toLocaleDateString('tr-TR')}`;
-             if (bilancoStartDate) return `${new Date(bilancoStartDate).toLocaleDateString('tr-TR')} Tarihinden İtibaren`;
-             if (bilancoEndDate) return `${new Date(bilancoEndDate).toLocaleDateString('tr-TR')} Tarihine Kadar`;
-             return "Tüm Zamanlar";
-           };
+           const devredenBakiye = devredenGiris - devredenCikis;
+           const toplamGirisDahil = devredenBakiye + donemGiris;
+           const finalBakiye = toplamGirisDahil - donemCikis;
 
            return (
-             <div className="space-y-6">
-                <div className="text-center border-b-2 border-slate-800 pb-6 mb-8">
-                  <h1 className="text-2xl font-bold uppercase tracking-wider text-slate-900">Yükseller Apartmanı</h1>
-                  <h2 className="text-xl font-semibold text-slate-700 mt-2">Dönem Sonu Gelir-Gider (Bilanço) Tablosu</h2>
-                  <p className="text-slate-500 mt-2 font-medium">Raporlanan Dönem: {renderTitleDate()}</p>
+             <div className="text-slate-900 leading-relaxed text-sm">
+                <h1 className="text-2xl font-bold text-center mb-6 uppercase tracking-wide border-b-2 border-black pb-4">Yükseller Apartmanı<br/>Gelir-Gider Tablosu (Bilanço)</h1>
+                <div className="flex justify-between font-medium mb-6 text-slate-700">
+                  <p><strong>Dönem:</strong> {bilancoStartDate ? new Date(bilancoStartDate).toLocaleDateString('tr-TR') : 'Sistem Başlangıcı'} - {bilancoEndDate ? new Date(bilancoEndDate).toLocaleDateString('tr-TR') : 'Bugün'}</p>
+                  <p><strong>Rapor Tarihi:</strong> {new Date().toLocaleDateString('tr-TR')}</p>
                 </div>
                 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
-                   <div>
-                     <h3 className="text-lg font-bold text-slate-800 border-b-2 border-emerald-500 pb-2 mb-4">GELİRLER</h3>
-                     <table className="w-full text-sm">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+                  <div>
+                    <h3 className="font-bold text-lg mb-2 text-emerald-800 border-b border-emerald-800 pb-1">GELİRLER</h3>
+                    <table className="w-full text-left border-collapse border border-slate-300 mb-2">
                         <tbody>
-                          {devirBakiye > 0 && (
-                            <tr className="border-b border-slate-200 bg-slate-50">
-                              <td className="py-2 px-3 font-semibold text-slate-700">Geçmiş Dönemden Devreden Kasa:</td>
-                              <td className="py-2 px-3 text-right font-bold text-slate-800">{devirBakiye.toLocaleString('tr-TR')} TL</td>
-                            </tr>
-                          )}
-                          <tr className="border-b border-slate-200">
-                            <td className="py-2 px-3 text-slate-700">Aidat ve Demirbaş Tahsilatları:</td>
-                            <td className="py-2 px-3 text-right font-medium text-slate-800">{(donemGiris - Object.values(incomeByCategory).reduce((a,b)=>a+b,0)).toLocaleString('tr-TR')} TL</td>
-                          </tr>
-                          {Object.entries(incomeByCategory).map(([cat, amount]) => (
-                            <tr key={cat} className="border-b border-slate-100">
-                               <td className="py-2 px-3 text-slate-700">{cat} Geliri:</td>
-                               <td className="py-2 px-3 text-right font-medium text-slate-800">{amount.toLocaleString('tr-TR')} TL</td>
+                          {Object.entries(incomeByCategory).sort((a,b) => b[1]-a[1]).map(([cat, amount]) => (
+                            <tr key={cat} className="border-b border-slate-200">
+                                <td className="p-2 border-r border-slate-300">{cat}</td>
+                                <td className="p-2 text-right font-medium">{amount.toLocaleString('tr-TR')} TL</td>
                             </tr>
                           ))}
+                          {Object.keys(incomeByCategory).length === 0 && <tr><td colSpan="2" className="p-2 text-center text-slate-500">Dönem içi gelir bulunamadı.</td></tr>}
                         </tbody>
                         <tfoot>
-                          <tr className="bg-emerald-50 border-t-2 border-emerald-200">
-                            <td className="py-3 px-3 font-bold text-emerald-800 text-right">TOPLAM GELİR:</td>
-                            <td className="py-3 px-3 text-right font-bold text-emerald-700 text-lg">{toplamGiris.toLocaleString('tr-TR')} TL</td>
+                          <tr className="bg-emerald-50">
+                            <td className="p-2 border-r border-slate-300 font-bold text-emerald-900">DÖNEM İÇİ TOPLAM GELİR</td>
+                            <td className="p-2 text-right font-bold text-emerald-900">{donemGiris.toLocaleString('tr-TR')} TL</td>
                           </tr>
                         </tfoot>
-                     </table>
-                   </div>
+                    </table>
+                  </div>
 
-                   <div>
-                     <h3 className="text-lg font-bold text-slate-800 border-b-2 border-red-500 pb-2 mb-4">GİDERLER</h3>
-                     <table className="w-full text-sm">
+                  <div>
+                    <h3 className="font-bold text-lg mb-2 text-red-800 border-b border-red-800 pb-1">GİDERLER</h3>
+                    <table className="w-full text-left border-collapse border border-slate-300 mb-2">
                         <tbody>
-                          {devirBakiye < 0 && (
-                            <tr className="border-b border-slate-200 bg-slate-50">
-                              <td className="py-2 px-3 font-semibold text-slate-700">Geçmiş Dönemden Devreden Borç/Açık:</td>
-                              <td className="py-2 px-3 text-right font-bold text-red-600">{Math.abs(devirBakiye).toLocaleString('tr-TR')} TL</td>
-                            </tr>
-                          )}
                           {Object.entries(expenseByCategory).sort((a,b) => b[1]-a[1]).map(([cat, amount]) => (
-                            <tr key={cat} className="border-b border-slate-100">
-                               <td className="py-2 px-3 text-slate-700">{cat} Gideri:</td>
-                               <td className="py-2 px-3 text-right font-medium text-slate-800">{amount.toLocaleString('tr-TR')} TL</td>
+                            <tr key={cat} className="border-b border-slate-200">
+                                <td className="p-2 border-r border-slate-300">{cat}</td>
+                                <td className="p-2 text-right font-medium">{amount.toLocaleString('tr-TR')} TL</td>
                             </tr>
                           ))}
-                          {Object.keys(expenseByCategory).length === 0 && (
-                            <tr><td colSpan="2" className="py-4 text-center text-slate-500 italic">Dönem içi gider kaydı bulunmamaktadır.</td></tr>
-                          )}
+                          {Object.keys(expenseByCategory).length === 0 && <tr><td colSpan="2" className="p-2 text-center text-slate-500">Dönem içi gider bulunamadı.</td></tr>}
                         </tbody>
                         <tfoot>
-                          <tr className="bg-red-50 border-t-2 border-red-200">
-                            <td className="py-3 px-3 font-bold text-red-800 text-right">TOPLAM GİDER:</td>
-                            <td className="py-3 px-3 text-right font-bold text-red-700 text-lg">{donemCikis.toLocaleString('tr-TR')} TL</td>
+                          <tr className="bg-red-50">
+                            <td className="p-2 border-r border-slate-300 font-bold text-red-900">DÖNEM İÇİ TOPLAM GİDER</td>
+                            <td className="p-2 text-right font-bold text-red-900">{donemCikis.toLocaleString('tr-TR')} TL</td>
                           </tr>
                         </tfoot>
-                     </table>
-                   </div>
+                    </table>
+                  </div>
                 </div>
 
-                <div className="mt-8 bg-slate-100 p-6 rounded-xl flex justify-between items-center border border-slate-300">
-                   <h3 className="text-xl font-bold text-slate-800 uppercase tracking-wide">Devreden Net Kasa / Banka Bakiyesi:</h3>
-                   <span className={`text-3xl font-extrabold ${netKasa >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{netKasa >= 0 ? '' : '-'}{Math.abs(netKasa).toLocaleString('tr-TR')} TL</span>
+                <div className="w-full sm:w-2/3 mx-auto">
+                    <h3 className="font-bold text-lg mb-2 text-slate-800 border-b border-slate-800 pb-1 text-center">BİLANÇO ÖZETİ</h3>
+                    <table className="w-full text-left border-collapse border-2 border-slate-800">
+                        <tbody>
+                          <tr>
+                             <td className="p-3 border-b border-r border-slate-300 font-medium">Önceki Dönemden Devreden Kasa:</td>
+                             <td className="p-3 border-b border-slate-300 text-right font-bold">{devredenBakiye.toLocaleString('tr-TR')} TL</td>
+                          </tr>
+                          <tr>
+                             <td className="p-3 border-b border-r border-slate-300 font-medium text-emerald-700">Dönem İçi Toplam Gelir (+):</td>
+                             <td className="p-3 border-b border-slate-300 text-right font-bold text-emerald-700">{donemGiris.toLocaleString('tr-TR')} TL</td>
+                          </tr>
+                          <tr className="bg-slate-100">
+                             <td className="p-3 border-b border-r border-slate-300 font-bold">TOPLAM KASA GİRİŞİ (Devir + Gelir):</td>
+                             <td className="p-3 border-b border-slate-300 text-right font-bold">{toplamGirisDahil.toLocaleString('tr-TR')} TL</td>
+                          </tr>
+                          <tr>
+                             <td className="p-3 border-b border-r border-slate-300 font-medium text-red-700">Dönem İçi Toplam Gider (-):</td>
+                             <td className="p-3 border-b border-slate-300 text-right font-bold text-red-700">{donemCikis.toLocaleString('tr-TR')} TL</td>
+                          </tr>
+                          <tr className="bg-slate-800 text-white">
+                             <td className="p-3 border-r border-slate-600 font-bold text-lg">DÖNEM SONU KASA / BANKA MEVCUDU:</td>
+                             <td className="p-3 text-right font-bold text-lg">{finalBakiye.toLocaleString('tr-TR')} TL</td>
+                          </tr>
+                        </tbody>
+                    </table>
                 </div>
 
-                <div className="mt-16 flex justify-between px-10 text-center">
-                   <div><p className="font-bold mb-10">Yönetim Kurulu</p><p className="border-t border-slate-400 pt-2 w-48 mx-auto">(İmza)</p></div>
-                   <div><p className="font-bold mb-10">Denetim Kurulu</p><p className="border-t border-slate-400 pt-2 w-48 mx-auto">(İmza)</p></div>
+                <div className="mt-16 pt-8 flex justify-between px-8 text-center">
+                  <div><p className="font-bold mb-8">Yönetim Kurulu</p><p className="border-t border-slate-400 pt-2 w-48 mx-auto">(İmza)</p></div>
+                  <div><p className="font-bold mb-8">Denetim Kurulu</p><p className="border-t border-slate-400 pt-2 w-48 mx-auto">(İmza)</p></div>
                 </div>
              </div>
            );
         })()}
 
-        {docType === 'butce' && (() => {
-           return (
-             <div className="space-y-6 text-sm">
-                <div className="text-center border-b-2 border-slate-800 pb-6 mb-8">
-                  <h1 className="text-xl font-bold uppercase tracking-wider text-slate-900">Yükseller Apartmanı</h1>
-                  <h2 className="text-lg font-semibold text-slate-700 mt-1">Tahmini İşletme Projesi ve Bütçe Taslağı</h2>
-                  <p className="text-slate-500 mt-1 font-medium">Tarih: {new Date().toLocaleDateString('tr-TR')}</p>
+        {}
+        {docType === 'butce' && (
+          <div className="text-slate-900 leading-relaxed text-justify">
+             <h1 className="text-xl font-bold text-center mb-8 uppercase tracking-wide border-b-2 border-black pb-4">Yükseller Apartmanı Yeni Dönem<br/>Tahmini İşletme Projesi (Bütçe)</h1>
+             <p className="mb-6 text-right"><strong>Hazırlanma Tarihi:</strong> {new Date().toLocaleDateString('tr-TR')}</p>
+             <p className="mb-4"><strong>Sayın Kat Malikleri;</strong></p>
+             <p className="mb-6 indent-8">Kat mülkiyeti kanunu gereği, apartmanımızın önümüzdeki döneme ait tahmini gelir ve giderlerini belirlemek, hizmetlerin aksamadan yürütülmesini sağlamak amacıyla Yönetim Kurulumuzca hazırlanan İşletme Projesi aşağıda sunulmuştur. Bütçe hesaplamalarında geçmiş dönem gerçek verileri, asgari ücret öngörüleri ve güncel piyasa/enflasyon koşulları dikkate alınmıştır.</p>
+             
+             <h3 className="font-bold text-lg mb-3 underline">1. Tahmini Gider Tablosu</h3>
+             <table className="w-full text-left border-collapse border border-black mb-2 text-sm">
+                <thead><tr className="bg-slate-100">
+                  <th className="p-2 border border-black w-1/3">Gider Kalemi</th>
+                  <th className="p-2 border border-black w-1/3 text-center">Hesaplama (Aylık x Ay)</th>
+                  <th className="p-2 border border-black w-1/3 text-right">Yıllık Ödenek (TL)</th>
+                </tr></thead>
+                <tbody>
+                  {budgetItems.map(item => {
+                    const isOwnerShare = item.category.includes('Demirbaş') || item.category.includes('Yatırım');
+                    const isEqualShare = item.category.includes('Maaş') || item.category.includes('Personel') || item.category.includes('Kıdem');
+                    
+                    return (
+                      <tr key={item.id} className={isEqualShare ? "bg-indigo-50/60" : isOwnerShare ? "bg-orange-50/60" : "bg-emerald-50/60"}>
+                        <td className="p-2 border border-black font-medium">
+                          <div className="flex items-center justify-between">
+                            <span>{item.category}</span>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${isEqualShare ? 'bg-indigo-100 border-indigo-200 text-indigo-800' : isOwnerShare ? 'bg-orange-100 border-orange-200 text-orange-800' : 'bg-emerald-100 border-emerald-200 text-emerald-800'}`}>
+                              {isEqualShare ? 'Eşit (İşletme)' : isOwnerShare ? 'Arsa Payı (Yatırım)' : 'Arsa Payı (İşletme)'}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="p-2 border border-black text-center text-slate-700 font-mono text-xs">{Number(item.monthlyAmount).toLocaleString('tr-TR')} TL x {item.months} Ay</td>
+                        <td className="p-2 border border-black text-right font-bold">{Number(item.amount).toLocaleString('tr-TR')} TL</td>
+                      </tr>
+                    );
+                  })}
+                  <tr className="bg-slate-200">
+                    <td colSpan="2" className="p-2 border border-black font-bold text-right">TOPLAM YILLIK GİDER:</td>
+                    <td className="p-2 border border-black font-bold text-right text-lg">{totalAnnualBudget.toLocaleString('tr-TR')} TL</td>
+                  </tr>
+                </tbody>
+             </table>
+             <div className="flex flex-wrap gap-4 mb-8 text-xs">
+                <div className="flex items-center"><span className="w-3 h-3 bg-indigo-100 border border-indigo-200 inline-block mr-1"></span> Eşit Dağıtılacak İşletme Giderleri (KMK Md. 20/a)</div>
+                <div className="flex items-center"><span className="w-3 h-3 bg-emerald-100 border border-emerald-200 inline-block mr-1"></span> Arsa Payına Göre Dağıtılacak İşletme Giderleri (KMK Md. 20/b)</div>
+                <div className="flex items-center"><span className="w-3 h-3 bg-orange-100 border border-orange-200 inline-block mr-1"></span> Arsa Payına Göre Dağıtılacak YATIRIM Giderleri (Sadece Mal Sahibi)</div>
+             </div>
+
+             <h3 className="font-bold text-lg mb-3 underline">2. Gelir (Aidat) Dağılımı ve Tahsilat Planı (KMK Madde 20)</h3>
+             <p className="mb-4 text-sm indent-8">634 Sayılı Kat Mülkiyeti Kanunu Madde 20 gereğince; personel giderleri bağımsız bölüm sayısına <strong>eşit</strong>, diğer işletme giderleri <strong>arsa payı oranına</strong> göre dağıtılmıştır. Yatırım ve demirbaş ödemeleri ise yasal olarak doğrudan <strong className="text-orange-600 underline">Mal Sahibi sorumluluğunda</strong> olduğu için tabloda ayrı bir sütunda gösterilmiştir.</p>
+
+             <div className="bg-slate-50 p-6 border border-black rounded-lg mb-8">
+                <div className="flex justify-between border-b border-slate-300 pb-2 mb-2">
+                  <span className="font-medium text-slate-600">Aylık Personel Gideri (Eşit - İşletme):</span>
+                  <span className="font-bold">{personelMonthly.toLocaleString('tr-TR', { maximumFractionDigits: 2 })} TL</span>
+                </div>
+                <div className="flex justify-between border-b border-slate-300 pb-2 mb-2">
+                  <span className="font-medium text-slate-600">Aylık Diğer Giderler (Arsa Payı - İşletme):</span>
+                  <span className="font-bold">{operatingArsaMonthly.toLocaleString('tr-TR', { maximumFractionDigits: 2 })} TL</span>
+                </div>
+                <div className="flex justify-between border-b border-slate-300 pb-2 mb-2">
+                  <span className="font-medium text-slate-600">Aylık Demirbaş/Yatırım (Arsa Payı - Mal Sahibi):</span>
+                  <span className="font-bold text-orange-600">{ownerMonthly.toLocaleString('tr-TR', { maximumFractionDigits: 2 })} TL</span>
                 </div>
                 
-                <p className="text-justify indent-8 leading-relaxed mb-6">Kat Mülkiyeti Kanunu Madde 37 gereğince, apartmanımızın gelecek 1 yıllık dönemine ait tahmini işletme ve yatırım giderleri, piyasa koşulları ve geçmiş dönem gerçekleşmeleri dikkate alınarak aşağıda tablolandırılmıştır.</p>
-
-                <h3 className="font-bold text-lg text-slate-800 border-b border-slate-300 pb-2 mb-4">1. Tahmini Gider Kalemleri (Yıllık Bütçe)</h3>
-                <table className="w-full text-left border-collapse border border-slate-300 mb-8">
-                  <thead>
-                    <tr className="bg-slate-100 text-slate-800">
-                      <th className="border border-slate-300 p-2 w-1/4">Gider Kalemi</th>
-                      <th className="border border-slate-300 p-2 w-1/6">Aylık (TL)</th>
-                      <th className="border border-slate-300 p-2 w-1/6">Yıllık (TL)</th>
-                      <th className="border border-slate-300 p-2">Açıklama / Dayanak</th>
+                <table className="w-full mt-6 text-sm border-collapse border border-slate-300 bg-white">
+                  <thead className="bg-slate-200 text-slate-800">
+                    <tr>
+                      <th className="p-2 border border-slate-300 text-left">Birim Tipi / Numarası</th>
+                      <th className="p-2 border border-slate-300 text-center">Arsa Payı</th>
+                      <th className="p-2 border border-slate-300 text-right">Kiracı / İşletme Payı</th>
+                      <th className="p-2 border border-slate-300 text-right">Mal Sahibi (Yatırım) Payı</th>
+                      <th className="p-2 border border-slate-300 text-right">Önerilen Toplam Aidat</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {budgetItems.map(item => (
-                      <tr key={item.id}>
-                        <td className="border border-slate-300 p-2 font-medium">{item.category}</td>
-                        <td className="border border-slate-300 p-2 text-right">{Number(item.monthlyAmount).toLocaleString('tr-TR')} TL</td>
-                        <td className="border border-slate-300 p-2 text-right font-bold">{Number(item.amount).toLocaleString('tr-TR')} TL</td>
-                        <td className="border border-slate-300 p-2 text-[11px] text-slate-600">{item.notes}</td>
-                      </tr>
-                    ))}
-                    <tr className="bg-slate-50">
-                      <td colSpan="2" className="border border-slate-300 p-2 font-bold text-right text-slate-800">TOPLAM YILLIK BÜTÇE İHTİYACI:</td>
-                      <td className="border border-slate-300 p-2 text-right font-extrabold text-lg text-red-700">{totalAnnualBudget.toLocaleString('tr-TR')} TL</td>
-                      <td className="border border-slate-300 p-2"></td>
-                    </tr>
+                    {[
+                      { name: "Konutlar (Daire 1-44 Arası Tümü)", payi: 110 },
+                      { name: "Dükkan 45, 46", payi: 140 },
+                      { name: "Dükkan 47, 48, 49", payi: 70 },
+                      { name: "Dükkan 50", payi: 90 },
+                      { name: "Dükkan 51", payi: 321 }
+                    ].map((g, idx) => {
+                      const fees = calculateAidat(g.payi);
+                      return (
+                        <tr key={idx}>
+                          <td className="p-2 border border-slate-300">{g.name}</td>
+                          <td className="p-2 border border-slate-300 text-center text-slate-500">{g.payi} / 5741</td>
+                          <td className="p-2 border border-slate-300 text-right font-medium text-slate-700">{fees.tenant.toLocaleString('tr-TR')} TL</td>
+                          <td className="p-2 border border-slate-300 text-right font-medium text-orange-600">{fees.owner.toLocaleString('tr-TR')} TL</td>
+                          <td className="p-2 border border-slate-300 text-right font-bold text-slate-800 bg-slate-50">{fees.total.toLocaleString('tr-TR')} TL</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
-
-                <h3 className="font-bold text-lg text-slate-800 border-b border-slate-300 pb-2 mb-4">2. Giderlerin Dağılım Esasları ve Aidat Belirleme (KMK Md. 20)</h3>
-                <p className="text-justify leading-relaxed mb-4">Kanun gereği personel/kapıcı giderleri eşit, ortak alan sigorta, işletme, bakım ve onarım giderleri arsa payı oranında, demirbaş/yatırım giderleri ise yine arsa payı oranında sadece mal sahiplerine paylaştırılır.</p>
-
-                <div className="flex gap-6 mb-8">
-                  <div className="flex-1 border border-slate-300 rounded p-4 bg-slate-50">
-                    <p className="font-semibold mb-2 text-slate-700">A. Eşit Paylaşımlı Giderler (Personel, Maaş, Kıdem)</p>
-                    <p className="font-bold text-lg">{personelAnnual.toLocaleString('tr-TR')} TL / Yıl</p>
-                    <p className="text-sm text-slate-600 mt-1">Aylık: {personelMonthly.toLocaleString('tr-TR')} TL</p>
-                  </div>
-                  <div className="flex-1 border border-slate-300 rounded p-4 bg-slate-50">
-                    <p className="font-semibold mb-2 text-slate-700">B. Arsa Paylı İşletme Giderleri (Elek, Su, Bakım vs.)</p>
-                    <p className="font-bold text-lg">{operatingArsaAnnual.toLocaleString('tr-TR')} TL / Yıl</p>
-                    <p className="text-sm text-slate-600 mt-1">Aylık: {operatingArsaMonthly.toLocaleString('tr-TR')} TL</p>
-                  </div>
-                  <div className="flex-1 border border-slate-300 rounded p-4 bg-slate-50">
-                    <p className="font-semibold mb-2 text-slate-700">C. Arsa Paylı Yatırım Giderleri (Demirbaş)</p>
-                    <p className="font-bold text-lg">{ownerAnnual.toLocaleString('tr-TR')} TL / Yıl</p>
-                    <p className="text-sm text-slate-600 mt-1">Aylık: {ownerMonthly.toLocaleString('tr-TR')} TL</p>
-                  </div>
-                </div>
-
-                <h3 className="font-bold text-lg text-slate-800 border-b border-slate-300 pb-2 mb-4">3. Birim Bazlı Tahmini Aylık Aidat/Avans Tablosu</h3>
-                <div className="overflow-x-auto max-h-[600px] border border-slate-300 rounded">
-                  <table className="w-full text-center border-collapse text-xs">
-                    <thead className="bg-slate-100 sticky top-0">
-                      <tr>
-                        <th className="border border-slate-300 p-2 row-span-2">Birim Tipi / Adı</th>
-                        <th className="border border-slate-300 p-2 row-span-2">Arsa Payı</th>
-                        <th className="border border-slate-300 p-2 col-span-3 text-emerald-800">Hesaplanan Aylık Aidat / Avans Tutarı (TL)</th>
-                      </tr>
-                      <tr className="bg-slate-50">
-                        <th className="border border-slate-300 p-2 text-slate-600">Kiracının Ödeyeceği (A+B)</th>
-                        <th className="border border-slate-300 p-2 text-slate-600">Mal Sahibinin Ödeyeceği (C)</th>
-                        <th className="border border-slate-300 p-2 font-bold bg-amber-50">TOPLAM (Mal Sahibi Oturuyorsa)</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr className="bg-blue-50/30">
-                        <td className="border border-slate-300 p-2 font-bold text-left">Standart Daire (Örnek)</td>
-                        <td className="border border-slate-300 p-2">110</td>
-                        <td className="border border-slate-300 p-2">{calculateAidat(110).tenant.toLocaleString('tr-TR')}</td>
-                        <td className="border border-slate-300 p-2">{calculateAidat(110).owner.toLocaleString('tr-TR')}</td>
-                        <td className="border border-slate-300 p-2 font-bold bg-amber-50/50">{calculateAidat(110).total.toLocaleString('tr-TR')}</td>
-                      </tr>
-                      {units.filter(u => u.type === 'dukkan').map(dukkan => {
-                        const aidat = calculateAidat(dukkan.arsaPayi);
-                        return (
-                          <tr key={dukkan.id}>
-                            <td className="border border-slate-300 p-2 font-medium text-left">{dukkan.name}</td>
-                            <td className="border border-slate-300 p-2">{dukkan.arsaPayi}</td>
-                            <td className="border border-slate-300 p-2">{aidat.tenant.toLocaleString('tr-TR')}</td>
-                            <td className="border border-slate-300 p-2">{aidat.owner.toLocaleString('tr-TR')}</td>
-                            <td className="border border-slate-300 p-2 font-bold bg-amber-50/50">{aidat.total.toLocaleString('tr-TR')}</td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div className="mt-16 flex justify-between px-10 text-center">
-                   <div><p className="font-bold mb-10">Yönetim Kurulu</p><p className="border-t border-slate-400 pt-2 w-48 mx-auto">(İmza)</p></div>
-                </div>
              </div>
-           );
-        })()}
+             
+             <p className="mb-12 indent-8 text-sm italic">* İşbu işletme projesi kat malikleri kurulunda görüşülerek karara bağlanacak olup, onaylanması halinde tebliğ hükmünde sayılacaktır. Ortaya çıkabilecek olağanüstü ve mecburi tamiratlar (çatı, tesisat vs.) için ayrıca ek bütçe kararı alınabilecektir.</p>
+             <div className="text-right"><p className="font-bold mb-8">Yükseller Apartmanı Yönetim Kurulu</p><p className="border-t border-black pt-2 inline-block w-48 text-center">İmza</p></div>
+          </div>
+        )}
 
+        {}
         {docType === 'cagri' && (
-          <div className="space-y-6 text-slate-800 text-justify">
-            <h1 className="text-2xl font-bold text-center underline uppercase">YÜKSELLER APARTMANI KAT MALİKLERİ KURULU {meetingType === 'olaganustu' ? 'OLAĞANÜSTÜ ' : ''}TOPLANTI ÇAĞRISI</h1>
-            <p className="mt-8"><strong>Sayın Kat Maliki;</strong></p>
-            <p className="indent-8 leading-relaxed">Yükseller Apartmanı Kat Malikleri Kurulu, aşağıda belirtilen gündem maddelerini görüşüp karara bağlamak üzere <strong>{new Date(meetingDate).toLocaleDateString('tr-TR')}</strong> tarihinde saat <strong>{meetingTime}</strong>'da <strong>{meetingPlace}</strong> adresinde toplanacaktır.</p>
-            <p className="indent-8 leading-relaxed">Bu toplantıda yeter sayı sağlanamadığı takdirde, ikinci toplantı bir hafta sonra aynı yer ve saatte nisapsız olarak (katılanların salt çoğunluğu ile) yapılacaktır.</p>
-            <p className="indent-8 leading-relaxed">Tüm kat maliklerimizin toplantıya şahsen veya vekâleten katılmaları önemle rica olunur.</p>
+          <div className="text-slate-900 leading-relaxed">
+            <h1 className="text-xl font-bold text-center mb-8 uppercase tracking-wide border-b-2 border-black pb-4">Yükseller Apartmanı Kat Malikleri Kurulu<br/>{meetingType === 'olagan' ? 'Olağan' : 'Olağanüstü'} Genel Kurul Toplantı Çağrısı</h1>
+            <p className="mb-4 text-right"><strong>Tarih:</strong> {new Date().toLocaleDateString('tr-TR')}</p>
+            <p className="mb-6"><strong>Sayın Kat Maliki;</strong></p>
+            <p className="mb-4 indent-8 text-justify">{meetingType === 'olagan' ? 'Yükseller Apartmanı Kat Malikleri Kurulu, yıllık olağan toplantısını yapmak, geçmiş dönemi değerlendirmek ve yeni dönem bütçesi ile yönetimini belirlemek üzere aşağıda belirtilen gündem maddelerini görüşmek için toplanacaktır.' : 'Yükseller Apartmanı Kat Malikleri Kurulu, apartmanımızı ilgilendiren önemli ve acil konuları görüşmek ve karara bağlamak üzere aşağıda belirtilen gündem maddeleriyle olağanüstü toplanacaktır.'}</p>
+            <p className="mb-4 indent-8 text-justify">Toplantı <strong>{meetingDate ? new Date(meetingDate).toLocaleDateString('tr-TR') : '.../.../202..'}</strong> tarihinde, saat <strong>{meetingTime}</strong>'da <strong>{meetingPlace}</strong> adresinde yapılacaktır. Bu toplantıda yeterli çoğunluk sağlanamadığı takdirde, ikinci toplantı bir hafta sonra aynı yer ve saatte çoğunluk aranmaksızın yapılacaktır.</p>
+            <p className="mb-8 indent-8 text-justify">Kat Mülkiyeti Kanunu uyarınca alınacak kararlar tüm kat maliklerini bağlayacağından, toplantıya katılmanızı veya kendinizi bir vekille temsil ettirmenizi önemle rica ederiz.</p>
             
-            <h2 className="font-bold mt-8 mb-4 underline">GÜNDEM MADDELERİ:</h2>
-            <ol className="list-decimal pl-10 space-y-3 font-medium">
-              <li>Açılış, yoklama ve toplantı divan başkanı ile yazmanın seçilmesi,</li>
-              {meetingType === 'olagan' ? (
-                <>
-                  <li>Yönetim Kurulu faaliyet raporunun okunması ve ibrası,</li>
-                  <li>Denetim Kurulu raporunun okunması ve ibrası,</li>
-                  <li>Gelir-gider (bilanço) tablosunun görüşülmesi,</li>
-                  <li>Yeni dönem işletme projesinin (bütçe ve aidatların) görüşülerek onaylanması,</li>
-                  <li>Yeni Yönetim ve Denetim Kurullarının seçilmesi,</li>
-                </>
-              ) : (
-                <li>{extraAgenda} konusunun detaylıca görüşülüp karara bağlanması,</li>
-              )}
-              {customAgenda.map((item, idx) => (
-                <li key={idx}>{item}</li>
-              ))}
-              <li>Dilek, temenniler ve kapanış.</li>
-            </ol>
-            <div className="mt-16 text-right w-full"><p className="font-bold mr-12">Yönetim Kurulu</p></div>
+            <h2 className="font-bold text-lg mb-3 underline">GÜNDEM MADDELERİ:</h2>
+            {meetingType === 'olagan' ? (
+              <ol className="list-decimal pl-6 space-y-2 mb-12">
+                <li>Açılış, yoklama ve toplantı yeter sayısının tespiti.</li><li>Saygı duruşu ve Divan Heyeti'nin seçilmesi.</li><li>Divan Heyeti'ne toplantı tutanaklarını imzalama yetkisi verilmesi.</li><li>Geçmiş dönem Yönetim Kurulu Faaliyet Raporunun ve Denetim Kurulu Raporunun okunması.</li><li>Yönetim ve Denetim Kurullarının ayrı ayrı ibrası (aklanması).</li><li>Yeni dönem İşletme Projesi'nin görüşülmesi ve karara bağlanması.</li><li>Yeni dönem Yönetim ve Denetim Kurulu asil ve yedek üyelerinin seçimi.</li>
+                {customAgenda.map((item, idx) => <li key={`custom-${idx}`}>{item}</li>)}
+                <li>Dilek, temenniler ve kapanış.</li>
+              </ol>
+            ) : (
+              <ol className="list-decimal pl-6 space-y-2 mb-12">
+                <li>Açılış, yoklama ve toplantı yeter sayısının tespiti.</li><li>Saygı duruşu ve Divan Heyeti'nin seçilmesi.</li><li>Divan Heyeti'ne toplantı tutanaklarını imzalama yetkisi verilmesi.</li><li><strong>{extraAgenda || '........................................................................'}</strong> konusunun görüşülerek karara bağlanması.</li>
+                {customAgenda.map((item, idx) => <li key={`custom-${idx}`}>{item}</li>)}
+                <li>Dilek, temenniler ve kapanış.</li>
+              </ol>
+            )}
+            <div className="text-right mt-12"><p className="font-bold mb-8">Yükseller Apartmanı Yönetim Kurulu</p><p className="border-t border-black pt-2 inline-block w-48 text-center">İmza</p></div>
           </div>
         )}
 
         {docType === 'hazirun' && (
-          <div className="space-y-4">
-            <h1 className="text-xl font-bold text-center uppercase">YÜKSELLER APARTMANI KAT MALİKLERİ KURULU HAZİRUN LİSTESİ</h1>
-            <p className="text-center text-sm text-slate-600 mb-4">Toplantı Tarihi: {meetingDate ? new Date(meetingDate).toLocaleDateString('tr-TR') : '................'} - {meetingTime} | Yer: {meetingPlace}</p>
-            <table className="w-full text-xs text-left border-collapse border border-slate-400 print-area">
-              <thead><tr className="bg-slate-100"><th className="border border-slate-400 p-2 w-16 text-center">Birim</th><th className="border border-slate-400 p-2">Malik Adı Soyadı</th><th className="border border-slate-400 p-2 w-16 text-center">Arsa Payı</th><th className="border border-slate-400 p-2 w-24 text-center">Katılım Şekli</th><th className="border border-slate-400 p-2 w-32 text-center">İmza</th></tr></thead>
-              <tbody>{units.map(u => (<tr key={u.id}><td className="border border-slate-400 p-2 text-center font-bold">{u.name}</td><td className="border border-slate-400 p-2">{u.ownerName}</td><td className="border border-slate-400 p-2 text-center">{u.arsaPayi || '-'}</td><td className="border border-slate-400 p-2"><div className="flex justify-between px-1 text-[10px]"><span>[ ] Asil</span><span>[ ] Vekil</span></div></td><td className="border border-slate-400 p-3"></td></tr>))}</tbody>
+          <div className="text-slate-900">
+            <h1 className="text-lg font-bold text-center mb-6 uppercase tracking-wide border-b-2 border-black pb-2">Yükseller Apartmanı {meetingType === 'olagan' ? 'Olağan' : 'Olağanüstü'} Genel Kurul Hazirun Cetveli</h1>
+            <div className="flex justify-between text-sm mb-4 font-medium"><p><strong>Toplantı Tarihi:</strong> {meetingDate ? new Date(meetingDate).toLocaleDateString('tr-TR') : '...............'}</p><p><strong>Toplantı Yeri:</strong> {meetingPlace}</p></div>
+            <table className="w-full text-left border-collapse border border-black text-sm">
+              <thead><tr className="bg-slate-100"><th className="p-2 border border-black w-12 text-center">No</th><th className="p-2 border border-black w-32">Birim Adı</th><th className="p-2 border border-black">Malik Adı Soyadı</th><th className="p-2 border border-black w-32 text-center">Asaleten / Vekaleten</th><th className="p-2 border border-black w-32 text-center">İmza</th></tr></thead>
+              <tbody>
+                {units.map((unit, index) => ( <tr key={unit.id}><td className="p-2 border border-black text-center">{index + 1}</td><td className="p-2 border border-black font-medium">{unit.name}</td><td className="p-2 border border-black">{unit.ownerName || '....................................'}</td><td className="p-2 border border-black"></td><td className="p-2 border border-black h-10"></td></tr> ))}
+              </tbody>
             </table>
+            <div className="mt-8 flex justify-between px-10">
+              <div className="text-center"><p className="font-bold mb-8">Divan Başkanı</p><p className="border-t border-black pt-2 w-32">İmza</p></div>
+              <div className="text-center"><p className="font-bold mb-8">Yazman</p><p className="border-t border-black pt-2 w-32">İmza</p></div>
+            </div>
           </div>
         )}
 
         {docType === 'yonetim' && (
-          <div className="space-y-6 text-slate-800 text-justify">
-            <h1 className="text-2xl font-bold text-center uppercase">Yönetim Kurulu Faaliyet Raporu</h1>
-            <p className="mt-8"><strong>Değerli Kat Maliklerimiz;</strong></p>
-            <p className="indent-8 leading-relaxed">Geçtiğimiz hizmet dönemi boyunca apartmanımızın huzuru, güvenliği ve teknik işleyişi için yönetim kurulu olarak azami gayret gösterilmiştir.</p>
-            <p className="indent-8 leading-relaxed">Dönem içerisinde apartmanımızın rutin temizlik, asansör bakımı, çöp alımı ve elektrik abonelik ödemeleri aksatılmadan zamanında yapılmıştır. Bekleyen aidat borçlarının tahsili için gerekli bildirimler düzenli olarak yapılmış, yasal mevzuat çerçevesinde KMK Md.20 uyarınca gecikme faizi otomatik olarak işletilmiştir.</p>
+          <div className="text-slate-900 leading-relaxed text-justify">
+            <h1 className="text-xl font-bold text-center mb-8 uppercase tracking-wide border-b-2 border-black pb-4">Yönetim Kurulu Faaliyet Raporu</h1>
+            <p className="mb-6 text-right"><strong>Tarih:</strong> {new Date().toLocaleDateString('tr-TR')}</p>
+            <p className="mb-4"><strong>Sayın Divan, Değerli Kat Malikleri;</strong></p>
+            <p className="mb-4 indent-8">Görevde bulunduğumuz hizmet dönemi içerisinde, sitemizin huzuru, güvenliği ve değerinin korunması amacıyla Kat Mülkiyeti Kanunu ve Yönetim Planı çerçevesinde çalışmalarımız titizlikle yürütülmüştür.</p>
+            <p className="mb-4 indent-8">Dönem içerisinde asansör bakımları periyodik olarak yaptırılmış, ortak alan temizlik ve aydınlatma giderleri zamanında karşılanmış, binamızın acil onarım gerektiren fiziki ihtiyaçlarına hızla müdahale edilmiştir. Finansal şeffaflık ilkesi gereği, gelir ve gider tablomuz aşağıda özetlenmiştir:</p>
+            <div className="my-8 flex justify-center">
+              <table className="w-3/4 text-left border-collapse border border-black">
+                <tbody>
+                  <tr><td className="p-3 border border-black font-semibold bg-slate-100">Dönem İçi Toplam Gelir (Tahsilat):</td><td className="p-3 border border-black text-right">{totalTahsilat.toLocaleString('tr-TR')} TL</td></tr>
+                  <tr><td className="p-3 border border-black font-semibold bg-slate-100">Dönem İçi Toplam Gider (Harcamalar):</td><td className="p-3 border border-black text-right">-{totalGider.toLocaleString('tr-TR')} TL</td></tr>
+                  <tr><td className="p-3 border border-black font-bold bg-slate-200">Kasa / Banka Devir Bakiyesi:</td><td className="p-3 border border-black text-right font-bold">{totalKasa.toLocaleString('tr-TR')} TL</td></tr>
+                </tbody>
+              </table>
+            </div>
             {customYonetim.map((item, idx) => (
-              <p key={idx} className="indent-8 leading-relaxed">{item}</p>
+               <p key={`custom-${idx}`} className="mb-4 indent-8 text-justify">{item}</p>
             ))}
-            <p className="indent-8 leading-relaxed">Ek'te sunulan bilanço tablolarından da görüleceği üzere bütçe dengesi korunmuş olup, şeffaf bir yönetim anlayışı sergilenmiştir. Bugüne kadar bizlere verdiğiniz destekten ötürü teşekkür eder, genel kurulumuzun hayırlı olmasını dileriz.</p>
-            <div className="mt-16 text-right w-full"><p className="font-bold mr-12">Yönetim Kurulu</p></div>
+            <p className="mb-4 indent-8">Sitemizin ortak yaşama dair kurallarına riayet eden ve aidat ödemelerini düzenli yaparak yönetime destek olan tüm komşularımıza teşekkür ederiz. Bekleyen aidat ve faiz alacaklarının hukuki takibi yeni döneme devredilmiştir.</p>
+            <p className="mb-12 indent-8">Görev dönemimize ait hesap ve faaliyetlerimizi takdirlerinize sunar, Yönetim Kurulumuzun ibra edilmesini (aklanmasını) saygılarımızla arz ederiz.</p>
+            <div className="text-right"><p className="font-bold mb-8">Yönetim Kurulu Başkanı</p><p className="border-t border-black pt-2 inline-block w-48 text-center">İmza</p></div>
+          </div>
+        )}
+
+        {docType === 'denetim' && (
+          <div className="text-slate-900 leading-relaxed text-justify">
+            <h1 className="text-xl font-bold text-center mb-8 uppercase tracking-wide border-b-2 border-black pb-4">Denetim Kurulu Raporu</h1>
+            <p className="mb-6 text-right"><strong>Tarih:</strong> {new Date().toLocaleDateString('tr-TR')}</p>
+            <p className="mb-4"><strong>Yükseller Apartmanı Kat Malikleri Genel Kurul Başkanlığı'na;</strong></p>
+            <p className="mb-4 indent-8">Apartmanımız Yönetim Kurulu'nun, geçmiş çalışma dönemine ait hesapları, karar defteri, işletme defteri ile gelir-gider makbuzları ve faturaları kurulumuzca detaylı bir şekilde incelenmiştir.</p>
+            <p className="mb-4 indent-8">Yapılan denetimler sonucunda;</p>
+            <ul className="list-disc pl-10 mb-4 space-y-2">
+              <li>Karar defterinin usulüne uygun tutulduğu, kararların imza altına alındığı,</li><li>Gelirlerin makbuz veya banka dekontları karşılığında tahsil edildiği ve kayıtlara doğru geçirildiği,</li><li>Giderlerin tamamının fatura veya geçerli yasal belgelere dayandığı, harcamaların site menfaatine uygun olduğu,</li><li>Kasa ve banka kayıtları ile defter kayıtlarının birbirini tam olarak tuttuğu ({totalKasa.toLocaleString('tr-TR')} TL nakit mevcudu bulunduğu) tespit edilmiştir.</li>
+              {customDenetim.map((item, idx) => <li key={`custom-${idx}`}>{item}</li>)}
+            </ul>
+            <p className="mb-4 indent-8">Yönetim Kurulunun, tahsil edilemeyen borçlara ilişkin Kat Mülkiyeti Kanunu Madde 20 uyarınca aylık %5 gecikme tazminatı işletme yükümlülüğünü yerine getirdiği görülmüştür.</p>
+            <p className="mb-12 indent-8">Netice olarak; dürüst, şeffaf ve başarılı bir yönetim sergileyen Yönetim Kurulunun hesap ve işlemlerinin usulüne uygun olduğu anlaşıldığından, Yönetim Kurulunun <strong>İBRA EDİLMESİNİ</strong> Genel Kurulun yüksek takdirlerine saygıyla arz ve teklif ederiz.</p>
+            <div className="text-right"><p className="font-bold mb-8">Denetim Kurulu Üyesi / Denetçi</p><p className="border-t border-black pt-2 inline-block w-48 text-center">İmza</p></div>
           </div>
         )}
       </div>
@@ -2763,111 +2725,197 @@ function AdminAssembly({ units, computations, transactions, settings }) {
 
 function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransaction, onLogout }) {
   const [activeTab, setActiveTab] = useState('summary');
-  const [showPaymentModal, setShowPaymentModal] = useState(false);
-  const [paymentAmount, setPaymentAmount] = useState('');
-  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
+  const [sysMessage, setSysMessage] = useState(null);
+  const notificationSent = useRef(false);
 
-  const handlePayment = (e) => {
-    e.preventDefault();
-    if (paymentAmount && paymentDate) {
-      onAddTransaction({ 
-        type: 'payment', 
-        amount: Number(paymentAmount), 
-        unitId: unitData.id, 
-        description: 'Elden / Banka Ödeme Bildirimi', 
-        date: paymentDate 
-      });
-      setShowPaymentModal(false);
-      setPaymentAmount('');
+  const [historySearch, setHistorySearch] = useState('');
+  const [expenseSearch, setExpenseSearch] = useState('');
+  const [historyStartDate, setHistoryStartDate] = useState('');
+  const [historyEndDate, setHistoryEndDate] = useState('');
+
+  const unitId = unitData.id;
+  const unitName = unitData.name;
+  const balance = balanceObj?.balance || 0;
+  const dueBalance = balanceObj?.dueBalance || 0;
+  const penaltyBalance = balanceObj?.penaltyBalance || 0;
+  const fixtureBalance = balanceObj?.fixtureBalance || 0;
+  const extraBalance = balanceObj?.extraBalance || 0;
+  const customBalance = balanceObj?.customBalance || 0;
+  
+  const isTenant = unitData.residentStatus === 'tenant';
+  const residentName = isTenant ? unitData.tenantName : unitData.ownerName;
+
+  const myTransactions = transactions.filter(t => t.unitId === unitId && t.type !== 'system_marker').filter(t => {
+    const matchSearch = t.description.toLowerCase().includes(historySearch.toLowerCase());
+    let matchDate = true;
+    const tDate = new Date(t.date); tDate.setHours(0, 0, 0, 0);
+    if (historyStartDate) { const sDate = new Date(historyStartDate); sDate.setHours(0, 0, 0, 0); if (tDate < sDate) matchDate = false; }
+    if (historyEndDate) { const eDate = new Date(historyEndDate); eDate.setHours(23, 59, 59, 999); if (tDate > eDate) matchDate = false; }
+    return matchSearch && matchDate;
+  }).sort((a,b) => new Date(b.date) - new Date(a.date));
+
+  const expenses = transactions.filter(t => t.type === 'expense').filter(t => t.description.toLowerCase().includes(expenseSearch.toLowerCase())).sort((a,b) => new Date(b.date) - new Date(a.date));
+
+  const now = new Date();
+  const isLastDay = now.getDate() === new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const isPastNoon = now.getHours() >= 12;
+  const showUrgentReminder = isLastDay && isPastNoon && balance > 0;
+
+  useEffect(() => {
+    if (showUrgentReminder && !notificationSent.current && 'Notification' in window) {
+      const sendNotification = () => {
+        new Notification('Yükseller Apartmanı - Son Gün Hatırlatması!', {
+          body: `Sayın ${residentName}, gecikme faizi işlememesi için gün sonuna kadar ${balance.toLocaleString('tr-TR')} TL tutarındaki borcunuzu ödeyiniz.`,
+          icon: 'https://cdn-icons-png.flaticon.com/512/565/565368.png'
+        });
+        notificationSent.current = true;
+      };
+
+      if (Notification.permission === 'granted') {
+        sendNotification();
+      } else if (Notification.permission !== 'denied') {
+        Notification.requestPermission().then(permission => {
+          if (permission === 'granted') sendNotification();
+        });
+      }
     }
-  };
-
-  const unitTxs = transactions.filter(t => t.unitId === unitData.id).sort((a,b) => new Date(b.date) - new Date(a.date));
+  }, [showUrgentReminder, balance, residentName]);
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <header className="bg-slate-900 text-white p-4 flex justify-between items-center shadow-md">
-        <div className="font-bold text-lg flex items-center"><Home className="mr-2"/> {unitData.name} Paneli</div>
-        <button onClick={onLogout} className="flex items-center text-slate-300 hover:text-white"><LogOut size={18} className="mr-2"/> Çıkış</button>
-      </header>
-      <div className="max-w-4xl mx-auto p-4 md:p-6 space-y-6">
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex flex-col md:flex-row justify-between items-center gap-4">
-          <div>
-            <h2 className="text-xl font-bold text-slate-800">Güncel Bakiye Durumunuz</h2>
-            <p className="text-slate-500 text-sm mt-1">Son Güncelleme: {new Date().toLocaleDateString('tr-TR')}</p>
+      <header className="bg-blue-600 text-white sticky top-0 z-10 shadow-md no-print">
+        <div className="max-w-4xl mx-auto px-4 py-4 flex justify-between items-center">
+          <div className="flex items-center space-x-2">
+            {unitId.includes('Daire') ? <Home className="text-blue-200" /> : <Store className="text-blue-200" />}
+            <div><span className="font-bold text-lg block leading-tight">{unitName} Paneli</span><span className="text-xs text-blue-200 hidden sm:block">Hoş geldiniz, {residentName || 'Sakin'}</span></div>
           </div>
-          <div className={`px-6 py-3 rounded-xl font-bold text-xl shadow-inner ${balanceObj?.balance > 0 ? 'bg-red-100 text-red-700' : balanceObj?.balance < 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-700'}`}>
-            {balanceObj?.balance > 0 ? `${balanceObj.balance.toLocaleString('tr-TR')} TL Borç` : balanceObj?.balance < 0 ? `${Math.abs(balanceObj.balance).toLocaleString('tr-TR')} TL Alacak` : 'Borcunuz Yok'}
-          </div>
+          <button onClick={onLogout} className="flex items-center text-blue-100 hover:text-white transition-colors"><LogOut size={18} className="mr-1" /> Çıkış</button>
         </div>
+      </header>
 
-        <div className="flex gap-4 border-b border-slate-200">
-          <button onClick={() => setActiveTab('summary')} className={`pb-2 px-1 font-medium transition-colors ${activeTab === 'summary' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>Hesap Özeti</button>
-          <button onClick={() => setActiveTab('history')} className={`pb-2 px-1 font-medium transition-colors ${activeTab === 'history' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>Geçmiş İşlemler</button>
+      <div className="max-w-4xl mx-auto px-4 py-8">
+        {showUrgentReminder && (
+          <div className="bg-red-600 text-white p-4 rounded-xl shadow-lg mb-6 flex items-start sm:items-center space-x-3 animate-pulse border-2 border-red-800">
+            <AlertCircle size={24} className="flex-shrink-0 mt-0.5 sm:mt-0" />
+            <div>
+              <h4 className="font-bold text-lg">Son Gün Hatırlatması!</h4>
+              <p className="text-sm text-red-100 font-medium">Bugün ayın son günü. Gecikme faizi (%5) işlememesi için lütfen <strong className="text-white text-base">{balance.toLocaleString('tr-TR')} TL</strong> tutarındaki borcunuzu gün sonuna kadar ödeyiniz.</p>
+            </div>
+          </div>
+        )}
+
+        {sysMessage && (
+          <div className={`p-4 rounded-lg flex items-center shadow-md mb-6 ${sysMessage.type === 'error' ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}>
+            {sysMessage.type === 'error' ? <AlertCircle className="mr-2" size={20} /> : <CheckCircle className="mr-2" size={20} />}<span className="font-medium">{sysMessage.text}</span>
+          </div>
+        )}
+
+        <div className="flex space-x-2 mb-6 overflow-x-auto pb-2 no-print">
+          <button onClick={() => setActiveTab('summary')} className={`px-4 py-2 rounded-full font-medium whitespace-nowrap transition-colors ${activeTab === 'summary' ? 'bg-slate-800 text-white' : 'bg-white text-slate-600 shadow-sm'}`}>Hesap Özeti</button>
+          <button onClick={() => setActiveTab('expenses')} className={`px-4 py-2 rounded-full font-medium whitespace-nowrap transition-colors ${activeTab === 'expenses' ? 'bg-slate-800 text-white' : 'bg-white text-slate-600 shadow-sm'}`}>Bina Giderleri (Şeffaflık)</button>
         </div>
 
         {activeTab === 'summary' && (
-          <div className="space-y-4">
-            <button onClick={() => setShowPaymentModal(true)} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg shadow-sm flex justify-center items-center transition-colors"><Wallet className="mr-2"/> Ödeme Bildir / Dekont Yükle</button>
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-              <h3 className="font-bold text-lg mb-4 border-b border-slate-100 pb-2 text-slate-800">Bakiye Detayları</h3>
-              <div className="space-y-3">
-                <div className="flex justify-between border-b border-slate-50 pb-2"><span className="text-slate-600 font-medium">Aidat Borcu:</span><span className="font-bold text-slate-800">{(balanceObj?.dueBalance || 0).toLocaleString('tr-TR')} TL</span></div>
-                <div className="flex justify-between border-b border-slate-50 pb-2"><span className="text-slate-600 font-medium">Demirbaş Borcu:</span><span className="font-bold text-slate-800">{(balanceObj?.fixtureBalance || 0).toLocaleString('tr-TR')} TL</span></div>
-                <div className="flex justify-between border-b border-slate-50 pb-2"><span className="text-slate-600 font-medium">Ekstra/Özel Borç:</span><span className="font-bold text-slate-800">{((balanceObj?.extraBalance || 0) + (balanceObj?.customBalance || 0)).toLocaleString('tr-TR')} TL</span></div>
-                <div className="flex justify-between"><span className="text-slate-600 font-medium">Gecikme Faizi:</span><span className="font-bold text-red-600">{(balanceObj?.penaltyBalance || 0).toLocaleString('tr-TR')} TL</span></div>
+          <div className="space-y-6">
+            <div className={`p-8 rounded-2xl shadow-sm text-center no-print ${balance > 0 ? 'bg-red-600 text-white' : 'bg-emerald-600 text-white'}`}>
+              <p className="text-white/80 font-medium mb-2 uppercase tracking-wider text-sm">Güncel Durum</p>
+              <h2 className="text-5xl font-bold mb-2">{Math.abs(balance).toLocaleString('tr-TR')} TL</h2>
+              <p className="text-lg opacity-90 mb-4">{balance > 0 ? 'Ödenmesi Gereken Borcunuz Bulunmaktadır' : balance < 0 ? 'Fazla Ödemeniz (Alacağınız) Bulunmaktadır' : 'Tüm Borçlarınız Ödenmiştir'}</p>
+              {balance > 0 && (
+                <div className="flex flex-wrap justify-center gap-2 mb-6 text-sm bg-black/10 py-2 px-4 rounded-lg inline-flex">
+                  <span>Aidat: <strong className="ml-1">{dueBalance.toLocaleString('tr-TR')} TL</strong></span>
+                  <span>Faiz: <strong className="ml-1">{penaltyBalance.toLocaleString('tr-TR')} TL</strong></span>
+                  {fixtureBalance > 0 && <span>Demirbaş: <strong className="ml-1">{fixtureBalance.toLocaleString('tr-TR')} TL</strong></span>}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden" id="resident-history-print">
+              <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50 no-print">
+                <h3 className="text-lg font-bold text-slate-800 flex items-center"><History className="mr-2 text-slate-500"/> Hesap Hareketlerim</h3>
+                <button onClick={() => handlePrint('resident-history-print', 'Hesap_Hareketlerim')} className="text-slate-500 hover:text-slate-800 flex items-center text-sm font-medium"><Printer size={16} className="mr-1"/> PDF İndir / Yazdır</button>
+              </div>
+
+              <div className="print-only mb-6 text-center border-b-2 border-slate-800 pb-4 mt-4 px-6">
+                <h2 className="text-2xl font-bold uppercase">Yükseller Apartmanı - {unitName} Hesap Ekstresi</h2>
+                <p className="text-slate-600">Sayın {residentName} | Tarih: {new Date().toLocaleDateString('tr-TR')}</p>
+              </div>
+
+              <div className="p-4 bg-white border-b border-slate-100 flex flex-wrap gap-2 no-print">
+                 <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 flex-1 sm:flex-none">
+                    <input type="date" className="text-sm outline-none font-medium bg-transparent w-full sm:w-auto" value={historyStartDate} onChange={e => setHistoryStartDate(e.target.value)} title="Başlangıç" />
+                    <span className="text-slate-400 font-bold">-</span>
+                    <input type="date" className="text-sm outline-none font-medium bg-transparent w-full sm:w-auto" value={historyEndDate} onChange={e => setHistoryEndDate(e.target.value)} title="Bitiş" />
+                 </div>
+                 <div className="relative flex-1 min-w-[150px]">
+                    <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input type="text" placeholder="Açıklama ara..." className="w-full pl-9 px-3 py-1.5 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500" value={historySearch} onChange={e => setHistorySearch(e.target.value)} />
+                 </div>
+              </div>
+
+              <div className="divide-y divide-slate-100">
+                {myTransactions.map(t => (
+                  <div key={t.id} className="p-4 flex justify-between items-center hover:bg-slate-50 transition-colors">
+                    <div className="flex items-center space-x-3">
+                      <div className={`p-2 rounded-lg hidden sm:block ${t.type === 'payment' ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'}`}>
+                        {t.type === 'payment' ? <TrendingDown size={20}/> : <TrendingUp size={20}/>}
+                      </div>
+                      <div>
+                        <p className="font-bold text-slate-800">{t.description}</p>
+                        <p className="text-xs text-slate-500 font-medium">{new Date(t.date).toLocaleDateString('tr-TR')} • {getTypeBadge(t.type)}</p>
+                      </div>
+                    </div>
+                    <div className={`font-bold text-lg whitespace-nowrap ${t.type === 'payment' ? 'text-emerald-600' : 'text-red-600'}`}>
+                      {t.type === 'payment' ? '+' : '-'}{t.amount.toLocaleString('tr-TR')} TL
+                    </div>
+                  </div>
+                ))}
+                {myTransactions.length === 0 && <div className="p-8 text-center text-slate-500 font-medium">Kayıt bulunamadı.</div>}
               </div>
             </div>
           </div>
         )}
 
-        {activeTab === 'history' && (
-          <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+        {activeTab === 'expenses' && (
+          <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden" id="resident-expenses-print">
+            <div className="p-6 border-b border-slate-100 bg-slate-50 flex justify-between items-center no-print">
+               <h3 className="text-lg font-bold text-slate-800 flex items-center"><ClipboardList className="mr-2 text-slate-500"/> Şeffaf Bina Giderleri</h3>
+               <button onClick={() => handlePrint('resident-expenses-print', 'Bina_Giderleri')} className="text-slate-500 hover:text-slate-800 flex items-center text-sm font-medium"><Printer size={16} className="mr-1"/> PDF İndir / Yazdır</button>
+            </div>
+            
+            <div className="print-only mb-6 text-center border-b-2 border-slate-800 pb-4 mt-4 px-6">
+              <h2 className="text-2xl font-bold uppercase">Yükseller Apartmanı - Bina Giderleri Tablosu</h2>
+              <p className="text-slate-600">Tarih: {new Date().toLocaleDateString('tr-TR')}</p>
+            </div>
+
+            <div className="p-4 bg-white border-b border-slate-100 no-print">
+               <div className="relative">
+                  <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input type="text" placeholder="Giderlerde ara (Örn: Asansör, Elektrik)..." className="w-full pl-9 px-3 py-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500" value={expenseSearch} onChange={e => setExpenseSearch(e.target.value)} />
+               </div>
+            </div>
+
             <div className="divide-y divide-slate-100">
-              {unitTxs.map(t => (
-                <div key={t.id} className="p-4 flex justify-between items-center hover:bg-slate-50 transition-colors">
+              {expenses.map(t => (
+                <div key={t.id} className="p-4 flex justify-between items-center hover:bg-slate-50">
                   <div>
-                    <p className="font-medium text-slate-800">{t.description}</p>
-                    <p className="text-xs text-slate-500 mt-1">{new Date(t.date).toLocaleDateString('tr-TR')} • {t.type === 'payment' ? 'Tahsilat' : t.type === 'due' ? 'Aidat Borcu' : t.type === 'penalty' ? 'Gecikme Faizi' : 'Demirbaş/Diğer'}</p>
+                    <p className="font-bold text-slate-800">{t.description}</p>
+                    <p className="text-xs text-slate-500 font-medium">{new Date(t.date).toLocaleDateString('tr-TR')} • <span className="text-slate-700">{t.category}</span></p>
                   </div>
-                  <div className={`font-bold ${t.type === 'payment' ? 'text-emerald-600' : 'text-red-600'}`}>
-                    {t.type === 'payment' ? '+' : '-'}{t.amount.toLocaleString('tr-TR')} TL
-                  </div>
+                  <div className="font-bold text-slate-800">{t.amount.toLocaleString('tr-TR')} TL</div>
                 </div>
               ))}
-              {unitTxs.length === 0 && <div className="p-6 text-center text-slate-500 font-medium">Kayıtlı hesap hareketi bulunamadı.</div>}
+              {expenses.length === 0 && <div className="p-8 text-center text-slate-500 font-medium">Gider kaydı bulunamadı.</div>}
             </div>
           </div>
         )}
-      </div>
 
-      {showPaymentModal && (
-        <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
-          <div className="bg-white p-6 rounded-2xl shadow-2xl w-full max-w-sm animate-in zoom-in-95">
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="font-bold text-lg text-slate-800 flex items-center"><Wallet className="mr-2 text-emerald-600"/> Ödeme Bildir</h3>
-              <button onClick={() => setShowPaymentModal(false)} className="text-slate-400 hover:text-slate-600">&times;</button>
-            </div>
-            <form onSubmit={handlePayment} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Ödeme Tarihi</label>
-                <input type="date" required className="w-full border border-slate-300 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500" value={paymentDate} onChange={e => setPaymentDate(e.target.value)} />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Yatırılan Tutar (TL)</label>
-                <input type="number" required className="w-full border border-slate-300 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="Örn: 1500" value={paymentAmount} onChange={e => setPaymentAmount(e.target.value)} />
-              </div>
-              <div className="bg-emerald-50 p-3 rounded-lg text-xs text-emerald-800 border border-emerald-100">
-                Bildirdiğiniz ödeme yönetici onayına sunulacak ve onaylandıktan sonra bakiyenizden düşülecektir.
-              </div>
-              <div className="flex gap-3 pt-2">
-                <button type="button" onClick={() => setShowPaymentModal(false)} className="flex-1 bg-slate-100 text-slate-700 py-2.5 rounded-lg hover:bg-slate-200 font-medium transition-colors">İptal</button>
-                <button type="submit" className="flex-1 bg-emerald-600 text-white py-2.5 rounded-lg hover:bg-emerald-700 font-bold shadow-sm transition-colors">Bildirimi Gönder</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+        <footer className="mt-12 mb-8 text-center no-print">
+          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
+            Powered by UKURTCU
+          </p>
+        </footer>
+      </div>
     </div>
   );
 }
