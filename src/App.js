@@ -180,22 +180,30 @@ const getBalances = (txs, units) => {
 };
 
 const runAutoPenalties = (currentTransactions, currentUnits) => {
-  if (currentTransactions.length === 0) return { toCreate: [], toUpdate: [], toDelete: [] };
+  if (!currentTransactions || currentTransactions.length === 0) return { toCreate: [], toUpdate: [], toDelete: [] };
   
-  // HATA DÜZELTMESİ: Sistem geçmiş ayları hesaplarken, yeni bulduğu faizleri 
-  // workingTransactions (hafıza) listesine ekler ki zincirleme sonsuz döngü yaşanmasın.
-  let workingTransactions = [...currentTransactions];
+  // Derin kopya (Deep Copy) kullanarak React'in kafasının karışmasını kesin olarak engelliyoruz
+  let workingTransactions = JSON.parse(JSON.stringify(currentTransactions));
   
-  const sortedTxs = [...workingTransactions].sort((a, b) => new Date(a.date) - new Date(b.date));
+  const validTxs = workingTransactions.filter(t => t && t.date && !isNaN(new Date(t.date).getTime()));
+  if (validTxs.length === 0) return { toCreate: [], toUpdate: [], toDelete: [] };
+  
+  const sortedTxs = validTxs.sort((a, b) => new Date(a.date) - new Date(b.date));
   const earliestDate = new Date(sortedTxs[0].date);
   const now = new Date();
   
   let checkDate = new Date(earliestDate.getFullYear(), earliestDate.getMonth() + 1, 1);
+  
+  // Güvenlik Kilidi: Ne olursa olsun en fazla 5 yıl (60 ay) geriye dönük tarasın ki tarayıcı çökmesin
+  const maxMonthsLimit = 60;
+  let iterations = 0;
+
   const toCreate = [];
   const toUpdate = [];
   const toDelete = [];
   
-  while (checkDate <= now) {
+  while (checkDate <= now && iterations < maxMonthsLimit) {
+    iterations++;
     const year = checkDate.getFullYear();
     const month = String(checkDate.getMonth() + 1).padStart(2, '0');
     const groupId = `auto-penalty-\({year}-\){month}`;
@@ -203,7 +211,6 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
     
     if (penaltyApplicationDate > now) break;
 
-    // currentTransactions YERİNE workingTransactions (Güncel Hafıza) KULLANILIYOR
     const pastTxs = workingTransactions.filter(t => 
         new Date(t.date) <= penaltyApplicationDate && 
         t.groupId !== groupId
@@ -220,13 +227,13 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
       const b = unitBalances[unit.id];
       const principal = (b.dueBalance || 0) + (b.fixtureBalance || 0) + (b.extraBalance || 0) + (b.customBalance || 0);
       
-      const expectedAmount = principal >= 1 ? Number((principal * 0.05).toFixed(2)) : 0;
+      // Küsürat hatalarını ve sonsuz döngüyü önlemek için kesin yuvarlama yapıyoruz
+      const expectedAmount = principal >= 1 ? Math.round(principal * 0.05 * 100) / 100 : 0;
       const existingUnitPenalties = existingPenalties.filter(t => t.unitId === unit.id);
       
       if (expectedAmount > 0) {
         monthHasPenalty = true;
         if (existingUnitPenalties.length === 0) {
-          // Yeni faiz oluşturuluyor ve HEMEN hafızadaki listeye (workingTransactions) ekleniyor
           const newPenalty = { 
               id: `temp-\({Date.now()}-\){Math.random()}`, 
               date: penaltyApplicationDate.toISOString(), 
@@ -240,9 +247,9 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
           workingTransactions.push(newPenalty); 
         } else {
           const primary = existingUnitPenalties[0];
-          if (primary.amount !== expectedAmount) {
+          // Yalnızca fark 1 kuruştan büyükse (0.01) güncelle. Bu sonsuz döngüyü kırar!
+          if (Math.abs(primary.amount - expectedAmount) > 0.01) {
             toUpdate.push({ id: primary.id, amount: expectedAmount });
-            // Hafızadaki eski değeri güncelle
             const idx = workingTransactions.findIndex(t => t.id === primary.id);
             if (idx !== -1) workingTransactions[idx].amount = expectedAmount;
           }
@@ -274,7 +281,6 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
     checkDate = new Date(year, checkDate.getMonth() + 1, 1);
   }
   
-  // Buluta yüklenmeden önce geçici ID'leri temizle (Firebase kendi ID'sini versin)
   const cleanToCreate = toCreate.map(tx => {
       const { id, ...rest } = tx;
       return rest;
@@ -384,8 +390,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    // İşlemler her değiştiğinde (ör: Toplu excel yüklendiğinde, manuel tahsilat girildiğinde) 
-    // arka planda faizleri otomatik denetle ve saniyeler içinde düzelt (Oto-Mutabakat)
+    // İşlemler her değiştiğinde faizleri denetle (Küsürat korumalı ve parçalı yükleme sistemli)
     if (currentUser === 'admin' && transactions.length > 0 && units.length > 0) {
       const timer = setTimeout(async () => {
          const { toCreate, toUpdate, toDelete } = runAutoPenalties(transactions, units);
@@ -393,14 +398,29 @@ export default function App() {
          const toCreateAll = [...toCreate, ...newReminders];
          
          if (toCreateAll.length > 0 || toUpdate.length > 0 || toDelete.length > 0) {
-             const batch = writeBatch(db);
-             
-             toCreateAll.forEach(tx => batch.set(doc(collection(db, "transactions")), { ...tx, addedBy: 'Sistem' }));
-             toUpdate.forEach(tx => batch.update(doc(db, "transactions", tx.id), { amount: tx.amount }));
-             toDelete.forEach(tx => batch.delete(doc(db, "transactions", tx.id)));
-             
              try {
-               await batch.commit();
+               // BÜYÜK DÜZELTME: Firebase'in tek seferde max 500 işlem sınırına 
+               // takılmamak için tüm işlemleri listeliyor ve 400'lü gruplar halinde yolluyoruz.
+               const allOperations = [];
+               
+               toCreateAll.forEach(tx => allOperations.push({ type: 'set', ref: doc(collection(db, "transactions")), data: { ...tx, addedBy: 'Sistem' } }));
+               toUpdate.forEach(tx => allOperations.push({ type: 'update', ref: doc(db, "transactions", tx.id), data: { amount: tx.amount } }));
+               toDelete.forEach(tx => allOperations.push({ type: 'delete', ref: doc(db, "transactions", tx.id) }));
+               
+               const chunkSize = 400; 
+               for (let i = 0; i < allOperations.length; i += chunkSize) {
+                   const chunk = allOperations.slice(i, i + chunkSize);
+                   const batch = writeBatch(db);
+                   
+                   chunk.forEach(op => {
+                       if (op.type === 'set') batch.set(op.ref, op.data);
+                       else if (op.type === 'update') batch.update(op.ref, op.data);
+                       else if (op.type === 'delete') batch.delete(op.ref);
+                   });
+                   
+                   await batch.commit(); // Her 400'lük paketi ayrı ayrı güvenle kaydet
+               }
+
                let msgs = [];
                const penaltyCreated = toCreateAll.filter(t => t.type === 'penalty').length;
                const penaltyDeleted = toDelete.filter(t => t.type === 'penalty').length;
@@ -418,7 +438,7 @@ export default function App() {
                console.error("Otomatik faiz mutabakatı yapılamadı:", e);
              }
          }
-      }, 1500); // Excel yüklemelerinde art arda tetiklenmeyi yumuşatmak için gecikme
+      }, 1500); 
       return () => clearTimeout(timer);
     }
   }, [transactions, units, currentUser]);
