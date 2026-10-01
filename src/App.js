@@ -182,11 +182,10 @@ const getBalances = (txs, units) => {
 const runAutoPenalties = (currentTransactions, currentUnits) => {
   if (currentTransactions.length === 0) return { toCreate: [], toUpdate: [], toDelete: [] };
 
-  // GEÇMİŞE DÖNÜK İŞLEM DÜZELTMESİ:
-  // Geçmiş ayların faizleri baştan hesaplanırken, sonraki ayların hesabının bozulmaması için
-  // işlemleri bir "simülasyon" dizisine kopyalıyoruz. Her ayın yeni faizi, bir sonraki ayı doğru etkiler.
+  // SİMÜLASYON DİZİSİ:
+  // Geçmiş tarihli bir ödeme girildiğinde, hesaplamanın aydan aya bozulmaması (kelebek etkisi) 
+  // için işlemleri bir kopya üzerinden aylık olarak güncelleyerek ilerliyoruz.
   let simulatedTxs = [...currentTransactions];
-
   const sortedTxs = [...currentTransactions].sort((a, b) => new Date(a.date) - new Date(b.date));
   const earliestDate = new Date(sortedTxs[0].date);
   const now = new Date();
@@ -201,27 +200,28 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
     const month = String(checkDate.getMonth() + 1).padStart(2, '0');
     const groupId = `auto-penalty-${year}-${month}`;
     
-    // Faiz kontrol/yansıtma anı: İlgili ayın 5'i saat 12:00
-    const penaltyApplicationDate = new Date(year, checkDate.getMonth(), 5, 12, 0, 0);
+    // 1. KURAL (FAİZ ZAMANI): Faiz tam olarak ayın 6'sının ilk saniyesinde (00:00:00) yansır.
+    const penaltyApplicationDate = new Date(year, checkDate.getMonth(), 6, 0, 0, 0);
     
+    // Eğer henüz ayın 6'sı olmadıysa, o ayın faiz hesabını durdur (bekle)
     if (penaltyApplicationDate > now) break;
 
-    // AYIN 5'İNE KADAR EK SÜRE DÜZELTMESİ:
-    // Faize girecek olan borçların sınırı bir önceki ayın son saniyesidir. (Örn: Hesap Şubat 5 ise, borçlar Ocak 31'de kesilir)
+    // 2. KURAL (EK SÜRE): Ödemeler için son mühlet ayın 5'i saat 23:59:59'dur. (Tam 5 gün ek süre)
+    const gracePeriodEnd = new Date(year, checkDate.getMonth(), 5, 23, 59, 59);
+
+    // 3. KURAL (İLGİLİ AY): Faize girecek borçların sınırı BİR ÖNCEKİ ayın son günüdür.
     const endOfPreviousMonth = new Date(year, checkDate.getMonth(), 0, 23, 59, 59);
 
     const pastTxs = simulatedTxs.filter(t => {
-        const txDate = new Date(t.date);
-
-        // Bu ayın halihazırda var olan faiz kayıtlarını hesaplamaya dahil etmiyoruz (yeniden hesaplanacak)
+        // Döngüdeki ayın mevcut faizlerini hesaba katma (yeniden hesaplanacak)
         if (t.groupId === groupId) return false;
 
+        const txDate = new Date(t.date);
         if (t.type === 'payment' || t.type === 'income') {
-            // Tahsilatlar için: Ayın 5'ine kadar yatan paralar borçtan düşülür (4 günlük ödeme ek süresi tanınır)
-            return txDate <= penaltyApplicationDate;
+            // Tahsilatlar: Ayın 5'i 23:59'a kadar yapılan tüm ödemeler borçtan düşülür
+            return txDate <= gracePeriodEnd;
         } else {
-            // Borçlar için: Sadece BİR ÖNCEKİ AYIN SONUNA kadar oluşan borçlar faize girer. 
-            // Bu ayın 1'inde çıkan aidat, bu ayın 5'indeki hesaba girmez, sonraki aya devreder.
+            // Borçlar: Sadece önceki ayın sonuna kadar oluşan borçlar faize girer
             return txDate <= endOfPreviousMonth;
         }
     });
@@ -232,11 +232,11 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
     const existingMarkers = simulatedTxs.filter(t => t.groupId === groupId && t.type === 'system_marker');
     
     let monthHasPenalty = false;
-    let newlyCalculatedPenalties = []; // Simülasyonu anlık güncellemek için kullanacağız
+    let newlyCalculatedPenalties = []; 
     
     currentUnits.forEach((unit) => {
       const b = unitBalances[unit.id];
-      // Sadece ana para borçları üzerinden %5 hesaplanır (Bakiye >= 1 TL kontrolü)
+      // Faiz sadece ana para (aidat, demirbaş vb) üzerinden %5 hesaplanır. Kuruş hataları için >= 1 baz alınır.
       const principal = (b.dueBalance || 0) + (b.fixtureBalance || 0) + (b.extraBalance || 0) + (b.customBalance || 0);
       const expectedAmount = principal >= 1 ? Number((principal * 0.05).toFixed(2)) : 0;
       
@@ -255,8 +255,7 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
 
         if (existingUnitPenalties.length === 0) {
           toCreate.push(newTx);
-          // Simülasyona eklemek için geçici bir id ile kaydediyoruz
-          newlyCalculatedPenalties.push({ ...newTx, id: `temp-create-${unit.id}-${Date.now()}` });
+          newlyCalculatedPenalties.push({ ...newTx, id: `temp-create-${unit.id}-${Math.random()}` });
         } else {
           const primary = existingUnitPenalties[0];
           if (primary.amount !== expectedAmount) {
@@ -265,7 +264,7 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
           } else {
             newlyCalculatedPenalties.push(primary);
           }
-          // Olası kopya hatalı faizler varsa temizliyoruz
+          // Veritabanında kalmış kopya veya hatalı faiz kayıtları varsa temizle
           for (let i = 1; i < existingUnitPenalties.length; i++) {
             toDelete.push({ id: existingUnitPenalties[i].id, type: 'penalty' });
           }
@@ -277,9 +276,8 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
       }
     });
 
-    // SİMÜLASYONU GÜNCELLE: 
-    // Eski hatalı faizleri çıkarıp, bu ay için hesapladığımız yeni ve doğru faizleri ana listemize yediriyoruz.
-    // Böylece döngü bir sonraki aya geçtiğinde tertemiz bir bakiye üzerinden hesap yapar.
+    // BİR SONRAKİ AYA HAZIRLIK (SİMÜLASYON GÜNCELLEMESİ):
+    // Bu ay için bulduğumuz doğru faizleri ana listeye yediriyoruz ki bir sonraki ayın döngüsü bozulmasın.
     simulatedTxs = simulatedTxs.filter(t => t.groupId !== groupId);
     simulatedTxs = [...simulatedTxs, ...newlyCalculatedPenalties];
     
