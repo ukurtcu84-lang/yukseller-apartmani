@@ -181,6 +181,12 @@ const getBalances = (txs, units) => {
 
 const runAutoPenalties = (currentTransactions, currentUnits) => {
   if (currentTransactions.length === 0) return { toCreate: [], toUpdate: [], toDelete: [] };
+
+  // GEÇMİŞE DÖNÜK İŞLEM DÜZELTMESİ:
+  // Geçmiş ayların faizleri baştan hesaplanırken, sonraki ayların hesabının bozulmaması için
+  // işlemleri bir "simülasyon" dizisine kopyalıyoruz. Her ayın yeni faizi, bir sonraki ayı doğru etkiler.
+  let simulatedTxs = [...currentTransactions];
+
   const sortedTxs = [...currentTransactions].sort((a, b) => new Date(a.date) - new Date(b.date));
   const earliestDate = new Date(sortedTxs[0].date);
   const now = new Date();
@@ -194,55 +200,88 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
     const year = checkDate.getFullYear();
     const month = String(checkDate.getMonth() + 1).padStart(2, '0');
     const groupId = `auto-penalty-${year}-${month}`;
+    
+    // Faiz kontrol/yansıtma anı: İlgili ayın 5'i saat 12:00
     const penaltyApplicationDate = new Date(year, checkDate.getMonth(), 5, 12, 0, 0);
     
     if (penaltyApplicationDate > now) break;
 
-    // Hesaplama anında BU AYIN mevcut faiz ve marker kayıtlarını HESAPLAMADAN HARİÇ TUTUYORUZ
-    const pastTxs = currentTransactions.filter(t => 
-        new Date(t.date) <= penaltyApplicationDate && 
-        t.groupId !== groupId
-    );
+    // AYIN 5'İNE KADAR EK SÜRE DÜZELTMESİ:
+    // Faize girecek olan borçların sınırı bir önceki ayın son saniyesidir. (Örn: Hesap Şubat 5 ise, borçlar Ocak 31'de kesilir)
+    const endOfPreviousMonth = new Date(year, checkDate.getMonth(), 0, 23, 59, 59);
+
+    const pastTxs = simulatedTxs.filter(t => {
+        const txDate = new Date(t.date);
+
+        // Bu ayın halihazırda var olan faiz kayıtlarını hesaplamaya dahil etmiyoruz (yeniden hesaplanacak)
+        if (t.groupId === groupId) return false;
+
+        if (t.type === 'payment' || t.type === 'income') {
+            // Tahsilatlar için: Ayın 5'ine kadar yatan paralar borçtan düşülür (4 günlük ödeme ek süresi tanınır)
+            return txDate <= penaltyApplicationDate;
+        } else {
+            // Borçlar için: Sadece BİR ÖNCEKİ AYIN SONUNA kadar oluşan borçlar faize girer. 
+            // Bu ayın 1'inde çıkan aidat, bu ayın 5'indeki hesaba girmez, sonraki aya devreder.
+            return txDate <= endOfPreviousMonth;
+        }
+    });
     
     const { unitBalances } = getBalances(pastTxs, currentUnits);
     
-    const existingPenalties = currentTransactions.filter(t => t.groupId === groupId && t.type === 'penalty');
-    const existingMarkers = currentTransactions.filter(t => t.groupId === groupId && t.type === 'system_marker');
+    const existingPenalties = simulatedTxs.filter(t => t.groupId === groupId && t.type === 'penalty');
+    const existingMarkers = simulatedTxs.filter(t => t.groupId === groupId && t.type === 'system_marker');
     
     let monthHasPenalty = false;
+    let newlyCalculatedPenalties = []; // Simülasyonu anlık güncellemek için kullanacağız
     
     currentUnits.forEach((unit) => {
       const b = unitBalances[unit.id];
+      // Sadece ana para borçları üzerinden %5 hesaplanır (Bakiye >= 1 TL kontrolü)
       const principal = (b.dueBalance || 0) + (b.fixtureBalance || 0) + (b.extraBalance || 0) + (b.customBalance || 0);
-      
-      // HATA DÜZELTMESİ: 1 TL altındaki kuruşluk/hatalı bakiyeleri sıfır kabul ederek sonsuz döngüyü önlüyoruz.
       const expectedAmount = principal >= 1 ? Number((principal * 0.05).toFixed(2)) : 0;
       
-      // HATA DÜZELTMESİ: .find yerine .filter kullanarak geçmişten kalan olası tüm kopya kayıtları tespit ediyoruz.
       const existingUnitPenalties = existingPenalties.filter(t => t.unitId === unit.id);
       
       if (expectedAmount > 0) {
         monthHasPenalty = true;
+        let newTx = {
+            date: penaltyApplicationDate.toISOString(),
+            type: 'penalty',
+            amount: expectedAmount,
+            unitId: unit.id,
+            description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`,
+            groupId: groupId
+        };
+
         if (existingUnitPenalties.length === 0) {
-          // Faiz hiç yazılmamış, oluştur
-          toCreate.push({ date: penaltyApplicationDate.toISOString(), type: 'penalty', amount: expectedAmount, unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, groupId: groupId });
+          toCreate.push(newTx);
+          // Simülasyona eklemek için geçici bir id ile kaydediyoruz
+          newlyCalculatedPenalties.push({ ...newTx, id: `temp-create-${unit.id}-${Date.now()}` });
         } else {
-          // Eğer birden fazla kopya faiz oluşmuşsa ilkini asıl kabul et, diğerlerini temizle.
           const primary = existingUnitPenalties[0];
           if (primary.amount !== expectedAmount) {
             toUpdate.push({ id: primary.id, amount: expectedAmount });
+            newlyCalculatedPenalties.push({ ...primary, amount: expectedAmount });
+          } else {
+            newlyCalculatedPenalties.push(primary);
           }
+          // Olası kopya hatalı faizler varsa temizliyoruz
           for (let i = 1; i < existingUnitPenalties.length; i++) {
             toDelete.push({ id: existingUnitPenalties[i].id, type: 'penalty' });
           }
         }
       } else {
         if (existingUnitPenalties.length > 0) {
-          // Ödeme sonradan girilmişse veya veritabanında kopya kayıtlar kalmışsa HEPSİNİ sil.
           existingUnitPenalties.forEach(tx => toDelete.push({ id: tx.id, type: 'penalty' }));
         }
       }
     });
+
+    // SİMÜLASYONU GÜNCELLE: 
+    // Eski hatalı faizleri çıkarıp, bu ay için hesapladığımız yeni ve doğru faizleri ana listemize yediriyoruz.
+    // Böylece döngü bir sonraki aya geçtiğinde tertemiz bir bakiye üzerinden hesap yapar.
+    simulatedTxs = simulatedTxs.filter(t => t.groupId !== groupId);
+    simulatedTxs = [...simulatedTxs, ...newlyCalculatedPenalties];
     
     const existingMarker = existingMarkers[0];
     if (!monthHasPenalty && !existingMarker && existingPenalties.length === 0) {
