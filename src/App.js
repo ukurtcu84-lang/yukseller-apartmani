@@ -282,6 +282,7 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
   return { toCreate: cleanToCreate, toUpdate, toDelete };
 };
 
+
 const runAutoReminders = (currentTransactions, currentUnits) => {
   if (currentTransactions.length === 0) return [];
   const now = new Date();
@@ -382,12 +383,11 @@ export default function App() {
     };
   }, []);
 
-  const isCalculatingRef = useRef(false);
-
   useEffect(() => {
-    if (currentUser === 'admin' && transactions.length > 0 && units.length > 0 && !isCalculatingRef.current) {
+    // İşlemler her değiştiğinde (ör: Toplu excel yüklendiğinde, manuel tahsilat girildiğinde) 
+    // arka planda faizleri otomatik denetle ve saniyeler içinde düzelt (Oto-Mutabakat)
+    if (currentUser === 'admin' && transactions.length > 0 && units.length > 0) {
       const timer = setTimeout(async () => {
-         isCalculatingRef.current = true;
          const { toCreate, toUpdate, toDelete } = runAutoPenalties(transactions, units);
          const newReminders = runAutoReminders(transactions, units);
          const toCreateAll = [...toCreate, ...newReminders];
@@ -401,17 +401,24 @@ export default function App() {
              
              try {
                await batch.commit();
-               setAutoToast("Sistem Oto-Mutabakat: Faizler güncellendi.");
-               setTimeout(() => setAutoToast(null), 4000);
+               let msgs = [];
+               const penaltyCreated = toCreateAll.filter(t => t.type === 'penalty').length;
+               const penaltyDeleted = toDelete.filter(t => t.type === 'penalty').length;
+               const penaltyUpdated = toUpdate.length;
+               
+               if (penaltyCreated > 0) msgs.push(`${penaltyCreated} yeni faiz yansıtıldı`);
+               if (penaltyUpdated > 0) msgs.push(`${penaltyUpdated} faiz güncellendi`);
+               if (penaltyDeleted > 0) msgs.push(`Geçmiş ödeme tespit edildi, ${penaltyDeleted} faiz iptal edildi`);
+               
+               if (msgs.length > 0) {
+                 setAutoToast(`Sistem Oto-Mutabakat: ${msgs.join(' | ')}.`);
+                 setTimeout(() => setAutoToast(null), 8000);
+               }
              } catch (e) {
                console.error("Otomatik faiz mutabakatı yapılamadı:", e);
              }
          }
-         
-         // İşlem bittikten sonra kilidi güvenli bir süre sonra açıyoruz
-         setTimeout(() => { isCalculatingRef.current = false; }, 3000);
-      }, 1500);
-      
+      }, 1500); // Excel yüklemelerinde art arda tetiklenmeyi yumuşatmak için gecikme
       return () => clearTimeout(timer);
     }
   }, [transactions, units, currentUser]);
