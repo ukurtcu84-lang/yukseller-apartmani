@@ -158,16 +158,13 @@ const getBalances = (txs, units) => {
 
   Object.values(unitBalances).forEach(details => {
     let remainingPayment = details.payment;
-    
-    // Mahsuplaşma sırası (Önce faiz, sonra ana paralar)
     if (remainingPayment >= details.penalty) { details.penaltyBalance = 0; remainingPayment -= details.penalty; } else { details.penaltyBalance = details.penalty - remainingPayment; remainingPayment = 0; }
     if (remainingPayment >= details.due) { details.dueBalance = 0; remainingPayment -= details.due; } else { details.dueBalance = details.due - remainingPayment; remainingPayment = 0; }
     if (remainingPayment >= details.fixture) { details.fixtureBalance = 0; remainingPayment -= details.fixture; } else { details.fixtureBalance = details.fixture - remainingPayment; remainingPayment = 0; }
     if (remainingPayment >= details.extra) { details.extraBalance = 0; remainingPayment -= details.extra; } else { details.extraBalance = details.extra - remainingPayment; remainingPayment = 0; }
     if (remainingPayment >= details.custom) { details.customBalance = 0; remainingPayment -= details.custom; } else { details.customBalance = details.custom - remainingPayment; remainingPayment = 0; }
 
-    // Eğer remainingPayment > 0 ise kişi alacaklı durumdadır (fazla ödeme). Bakiye eksiye düşmeli.
-    details.balance = details.dueBalance + details.fixtureBalance + details.extraBalance + details.customBalance + details.penaltyBalance - remainingPayment;
+    details.balance = details.dueBalance + details.fixtureBalance + details.extraBalance + details.customBalance + details.penaltyBalance;
 
     if (details.dueBalance > 0) totalBekleyenAidat += details.dueBalance;
     if (details.fixtureBalance > 0) totalBekleyenDemirbas += details.fixtureBalance;
@@ -180,20 +177,14 @@ const getBalances = (txs, units) => {
 };
 
 const runAutoPenalties = (currentTransactions, currentUnits) => {
-  if (currentTransactions.length === 0) return { toCreate: [], toUpdate: [], toDelete: [] };
-  
-  // HATA DÜZELTMESİ: Infinite Loop (Sonsuz Döngü) Fix
-  // İşlemleri doğrudan state veya snapshot yerine yerel bir kopya üzerinde yapıyoruz.
-  let workingTransactions = [...currentTransactions];
-  
-  const sortedTxs = [...workingTransactions].sort((a, b) => new Date(a.date) - new Date(b.date));
+  if (currentTransactions.length === 0) return [];
+  const sortedTxs = [...currentTransactions].sort((a, b) => new Date(a.date) - new Date(b.date));
   const earliestDate = new Date(sortedTxs[0].date);
   const now = new Date();
   
   let checkDate = new Date(earliestDate.getFullYear(), earliestDate.getMonth() + 1, 1);
-  const toCreate = [];
-  const toUpdate = [];
-  const toDelete = [];
+  const newPenalties = [];
+  let simulatedTxs = [...currentTransactions];
   
   while (checkDate <= now) {
     const year = checkDate.getFullYear();
@@ -203,98 +194,33 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
     
     if (penaltyApplicationDate > now) break;
 
-    // GÜNCEL ÇALIŞMA LİSTEMİZİ (workingTransactions) filtreliyoruz.
-    const pastTxs = workingTransactions.filter(t => {
-      if (t.groupId === groupId) return false;
+    const alreadyProcessed = simulatedTxs.some(t => t.groupId === groupId);
+    
+    if (!alreadyProcessed) {
+      const pastTxs = simulatedTxs.filter(t => new Date(t.date) <= penaltyApplicationDate);
+      const { unitBalances } = getBalances(pastTxs, currentUnits);
+      let monthHasPenalty = false;
       
-      const tDate = new Date(t.date);
-      const startOfCurrentMonth = new Date(year, checkDate.getMonth(), 1, 0, 0, 0);
-
-      // TAHSİLATLAR (Ödemeler): Ayın 5'ine kadar yapılan ödemeler kabul edilir.
-      // (4 günlük ekstra sürede yapılan ödemeler faizi engeller)
-      if (t.type === 'payment' || t.type === 'income') {
-          return tDate <= penaltyApplicationDate;
-      } 
-      // BORÇLAR (Aidat, Demirbaş vs.): Sadece GEÇEN AYIN SONUNA KADAR olan borçlar baz alınır.
-      // (İçinde bulunulan ayın 1'inde yansıtılan borç bu ay faize girmez, bir sonraki ay girer)
-      else {
-          return tDate < startOfCurrentMonth;
-      }
-  });
-    
-    const { unitBalances } = getBalances(pastTxs, currentUnits);
-    
-    const existingPenalties = workingTransactions.filter(t => t.groupId === groupId && t.type === 'penalty');
-    const existingMarkers = workingTransactions.filter(t => t.groupId === groupId && t.type === 'system_marker');
-    
-    let monthHasPenalty = false;
-    
-    currentUnits.forEach((unit) => {
-      const b = unitBalances[unit.id];
-      const principal = (b.dueBalance || 0) + (b.fixtureBalance || 0) + (b.extraBalance || 0) + (b.customBalance || 0);
-      
-      const expectedAmount = principal >= 1 ? Number((principal * 0.05).toFixed(2)) : 0;
-      const existingUnitPenalties = existingPenalties.filter(t => t.unitId === unit.id);
-      
-      if (expectedAmount > 0) {
-        monthHasPenalty = true;
-        if (existingUnitPenalties.length === 0) {
-          const newPenalty = { 
-            date: penaltyApplicationDate.toISOString(), type: 'penalty', amount: expectedAmount, 
-            unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, 
-            groupId: groupId, id: `temp-${Date.now()}-${Math.random()}` 
-          };
-          toCreate.push(newPenalty);
-          workingTransactions.push(newPenalty); // Yerel listeye de ekle
-        } else {
-          const primary = existingUnitPenalties[0];
-          if (primary.amount !== expectedAmount) {
-            toUpdate.push({ id: primary.id, amount: expectedAmount });
-            
-            const idx = workingTransactions.findIndex(t => t.id === primary.id);
-            if (idx > -1) workingTransactions[idx] = { ...workingTransactions[idx], amount: expectedAmount };
-          }
-          for (let i = 1; i < existingUnitPenalties.length; i++) {
-            toDelete.push({ id: existingUnitPenalties[i].id, type: 'penalty' });
-            workingTransactions = workingTransactions.filter(t => t.id !== existingUnitPenalties[i].id);
-          }
+      currentUnits.forEach((unit) => {
+        const b = unitBalances[unit.id];
+        const principal = (b.dueBalance || 0) + (b.fixtureBalance || 0) + (b.extraBalance || 0) + (b.customBalance || 0);
+        
+        if (principal > 0) {
+          const pAmount = Number((principal * 0.05).toFixed(2));
+          const pTx = { id: `auto-${year}-${month}-${unit.id}-${Math.random()}`, date: penaltyApplicationDate.toISOString(), type: 'penalty', amount: pAmount, unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, groupId: groupId };
+          newPenalties.push(pTx); simulatedTxs.push(pTx); monthHasPenalty = true;
         }
-      } else {
-        if (existingUnitPenalties.length > 0) {
-          existingUnitPenalties.forEach(tx => {
-            toDelete.push({ id: tx.id, type: 'penalty' });
-            workingTransactions = workingTransactions.filter(t => t.id !== tx.id);
-          });
-        }
+      });
+      
+      if (!monthHasPenalty) {
+         const marker = { id: `marker-${year}-${month}-${Math.random()}`, date: penaltyApplicationDate.toISOString(), type: 'system_marker', amount: 0, unitId: null, description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) - ${month}/${year}`, groupId: groupId };
+         newPenalties.push(marker); simulatedTxs.push(marker);
       }
-    });
-    
-    const existingMarker = existingMarkers[0];
-    if (!monthHasPenalty && !existingMarker && existingPenalties.length === 0) {
-       const newMarker = { 
-         date: penaltyApplicationDate.toISOString(), type: 'system_marker', amount: 0, 
-         unitId: null, description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) - ${month}/${year}`, 
-         groupId: groupId, id: `temp-${Date.now()}-${Math.random()}` 
-       };
-       toCreate.push(newMarker);
-       workingTransactions.push(newMarker);
-    } else if (monthHasPenalty && existingMarker) {
-       toDelete.push({ id: existingMarker.id, type: 'system_marker' });
-       workingTransactions = workingTransactions.filter(t => t.id !== existingMarker.id);
     }
-
     checkDate = new Date(year, checkDate.getMonth() + 1, 1);
   }
-  
-  // Buluta kaydederken geçici ID'leri temizle
-  const cleanToCreate = toCreate.map(t => {
-      const { id, ...rest } = t;
-      return rest;
-  });
-
-  return { toCreate: cleanToCreate, toUpdate, toDelete };
+  return newPenalties;
 };
-
 
 const runAutoReminders = (currentTransactions, currentUnits) => {
   if (currentTransactions.length === 0) return [];
@@ -396,46 +322,6 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    // İşlemler her değiştiğinde (ör: Toplu excel yüklendiğinde, manuel tahsilat girildiğinde) 
-    // arka planda faizleri otomatik denetle ve saniyeler içinde düzelt (Oto-Mutabakat)
-    if (currentUser === 'admin' && transactions.length > 0 && units.length > 0) {
-      const timer = setTimeout(async () => {
-         const { toCreate, toUpdate, toDelete } = runAutoPenalties(transactions, units);
-         const newReminders = runAutoReminders(transactions, units);
-         const toCreateAll = [...toCreate, ...newReminders];
-         
-         if (toCreateAll.length > 0 || toUpdate.length > 0 || toDelete.length > 0) {
-             const batch = writeBatch(db);
-             
-             toCreateAll.forEach(tx => batch.set(doc(collection(db, "transactions")), { ...tx, addedBy: 'Sistem' }));
-             toUpdate.forEach(tx => batch.update(doc(db, "transactions", tx.id), { amount: tx.amount }));
-             toDelete.forEach(tx => batch.delete(doc(db, "transactions", tx.id)));
-             
-             try {
-               await batch.commit();
-               let msgs = [];
-               const penaltyCreated = toCreateAll.filter(t => t.type === 'penalty').length;
-               const penaltyDeleted = toDelete.filter(t => t.type === 'penalty').length;
-               const penaltyUpdated = toUpdate.length;
-               
-               if (penaltyCreated > 0) msgs.push(`${penaltyCreated} yeni faiz yansıtıldı`);
-               if (penaltyUpdated > 0) msgs.push(`${penaltyUpdated} faiz güncellendi`);
-               if (penaltyDeleted > 0) msgs.push(`Geçmiş ödeme tespit edildi, ${penaltyDeleted} faiz iptal edildi`);
-               
-               if (msgs.length > 0) {
-                 setAutoToast(`Sistem Oto-Mutabakat: ${msgs.join(' | ')}.`);
-                 setTimeout(() => setAutoToast(null), 8000);
-               }
-             } catch (e) {
-               console.error("Otomatik faiz mutabakatı yapılamadı:", e);
-             }
-         }
-      }, 1500); // Excel yüklemelerinde art arda tetiklenmeyi yumuşatmak için gecikme
-      return () => clearTimeout(timer);
-    }
-  }, [transactions, units, currentUser]);
-
   const computations = useMemo(() => getBalances(transactions, units), [transactions, units]);
 
   const lastBilledMonth = useMemo(() => {
@@ -445,6 +331,32 @@ export default function App() {
 
   const handleLogin = (userId) => {
     setCurrentUser(userId);
+    
+    const newPenalties = runAutoPenalties(transactions, units);
+    const newReminders = runAutoReminders(transactions, units);
+    
+    if (newPenalties.length > 0 || newReminders.length > 0) {
+      const autoTxs = [...newPenalties, ...newReminders];
+      
+      const batch = writeBatch(db);
+      autoTxs.forEach(tx => {
+        const docRef = doc(collection(db, "transactions"));
+        batch.set(docRef, { ...tx, addedBy: 'Sistem' });
+      });
+      batch.commit().catch(e => console.error("Otomatik loglar kaydedilemedi", e));
+
+      dispatch({ type: 'ADD_AUTO_TRANSACTIONS', payload: autoTxs });
+      
+      let msgs = [];
+      const penaltyCount = newPenalties.filter(t => t.type === 'penalty').length;
+      if (penaltyCount > 0) msgs.push(`Geçmiş aylara ait ${penaltyCount} adet gecikme faizi yansıtıldı.`);
+      if (newReminders.length > 0) msgs.push(`Borçlu maliklere son gün ödeme hatırlatması gönderildi.`);
+      
+      if (msgs.length > 0) {
+        setAutoToast(`Sistem taraması: ${msgs.join(' | ')}`);
+        setTimeout(() => setAutoToast(null), 7000);
+      }
+    }
   };
   
   const handleLogout = () => setCurrentUser(null);
@@ -487,18 +399,17 @@ export default function App() {
     }
   };
 
-  const addBulkDue = async (type, daireAmount, dukkanAmounts, description, dateStr) => {
+  const addBulkDue = async (type, daireAmount, dukkanAmounts, description) => {
     try {
       const batch = writeBatch(db);
       const groupId = `bulk-${Date.now()}`;
-      const isoDate = dateStr ? new Date(dateStr).toISOString() : new Date().toISOString();
 
       units.forEach((unit) => {
         const amount = unit.type === 'daire' ? Number(daireAmount) : Number(dukkanAmounts[unit.id] || 0);
         if (amount > 0) {
           const docRef = doc(collection(db, "transactions"));
           batch.set(docRef, {
-            date: isoDate, 
+            date: new Date().toISOString(), 
             type, 
             amount, 
             unitId: unit.id, 
@@ -609,11 +520,11 @@ export default function App() {
     <>
       <style dangerouslySetInnerHTML={{__html: `
         @media print {
-          @page { size: A4 portrait; margin: 15mm; } 
+          @page { size: A4 portrait; margin: 15mm; } /* Her sayfada üst/alt ve yan boşlukları garanti eder */
           body { -webkit-print-color-adjust: exact; print-color-adjust: exact; background: white; margin: 0; padding: 0; }
           body * { visibility: hidden; }
           .print-target, .print-target * { visibility: visible !important; }
-          .print-target { position: absolute; left: 0; top: 0; width: 100%; height: auto; margin: 0; padding: 0; background: white; } 
+          .print-target { position: absolute; left: 0; top: 0; width: 100%; height: auto; margin: 0; padding: 0; background: white; } /* Padding kaldırıldı, boşlukları @page yönetecek */
           .no-print, .no-print * { display: none !important; }
           .print-only { display: block !important; }
           
@@ -1087,7 +998,6 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
   const [daireAmount, setDaireAmount] = useState('');
   const [dukkanAmounts, setDukkanAmounts] = useState({});
   const [bulkDesc, setBulkDesc] = useState('');
-  const [bulkDate, setBulkDate] = useState(new Date().toISOString().split('T')[0]);
 
   const [sysMessage, setSysMessage] = useState(null);
   const showMessage = (text, type = 'success') => { setSysMessage({ text, type }); setTimeout(() => setSysMessage(null), 4000); };
@@ -1145,9 +1055,9 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
 
   const handleBulkSubmit = (e) => {
     e.preventDefault();
-    if(daireAmount && bulkDesc && bulkDate) {
-      onAddBulkDue(bulkType, daireAmount, dukkanAmounts, bulkDesc, bulkDate);
-      setShowBulkModal(false); setBulkType('due'); setDaireAmount(''); setDukkanAmounts({}); setBulkDesc(''); setBulkDate(new Date().toISOString().split('T')[0]);
+    if(daireAmount && bulkDesc) {
+      onAddBulkDue(bulkType, daireAmount, dukkanAmounts, bulkDesc);
+      setShowBulkModal(false); setBulkType('due'); setDaireAmount(''); setDukkanAmounts({}); setBulkDesc('');
       showMessage("Tüm birimlere borçlandırma başarıyla eklendi.");
     }
   };
@@ -1416,22 +1326,17 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
         </div>
       )}
 
+      {}
       {showBulkModal && ( 
         <div className="bg-white p-6 rounded-xl shadow-sm border border-blue-100 mb-6 no-print">
           <h3 className="font-bold text-lg mb-4">Toplu Borçlandırma Ekle</h3>
           <form onSubmit={handleBulkSubmit} className="space-y-4">
-            <div className="flex flex-col mb-4 gap-4 border-b border-slate-100 pb-4">
-              <div className="flex flex-wrap gap-4">
-                <label className="flex items-center cursor-pointer text-slate-700"><input type="radio" name="bulkType" value="due" checked={bulkType === 'due'} onChange={(e) => setBulkType(e.target.value)} className="mr-2" /> Normal Aidat</label>
-                <label className="flex items-center cursor-pointer text-slate-700"><input type="radio" name="bulkType" value="fixture" checked={bulkType === 'fixture'} onChange={(e) => setBulkType(e.target.value)} className="mr-2" /> Demirbaş</label>
-                <label className="flex items-center cursor-pointer text-slate-700"><input type="radio" name="bulkType" value="extra" checked={bulkType === 'extra'} onChange={(e) => setBulkType(e.target.value)} className="mr-2" /> Ekstra/Acil Toplama</label>
-              </div>
-              <div className="flex flex-col sm:flex-row gap-4">
-                <input type="date" required className="w-full sm:w-40 border border-slate-300 rounded-lg px-4 py-2" value={bulkDate} onChange={e => setBulkDate(e.target.value)} title="İşlem Tarihi" />
-                <input type="text" required placeholder="Açıklama / Ay (Örn: Kasım Aidatı, Çatı Onarımı)" className="flex-1 border border-slate-300 rounded-lg px-4 py-2" value={bulkDesc} onChange={e => setBulkDesc(e.target.value)} />
-              </div>
+            <div className="flex flex-wrap gap-4 mb-4">
+              <label className="flex items-center cursor-pointer text-slate-700"><input type="radio" name="bulkType" value="due" checked={bulkType === 'due'} onChange={(e) => setBulkType(e.target.value)} className="mr-2" /> Normal Aidat</label>
+              <label className="flex items-center cursor-pointer text-slate-700"><input type="radio" name="bulkType" value="fixture" checked={bulkType === 'fixture'} onChange={(e) => setBulkType(e.target.value)} className="mr-2" /> Demirbaş</label>
+              <label className="flex items-center cursor-pointer text-slate-700"><input type="radio" name="bulkType" value="extra" checked={bulkType === 'extra'} onChange={(e) => setBulkType(e.target.value)} className="mr-2" /> Ekstra/Acil Toplama</label>
             </div>
-            
+            <input type="text" required placeholder="Açıklama / Ay (Örn: Kasım Aidatı, Çatı Onarımı)" className="w-full border border-slate-300 rounded-lg px-4 py-2" value={bulkDesc} onChange={e => setBulkDesc(e.target.value)} />
             <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
               <h4 className="font-semibold text-slate-700 mb-3 flex items-center"><Home size={16} className="mr-2"/> Daireler (Toplu Tutar)</h4>
               <input type="number" required placeholder="Tüm daireler için tutar (TL)" className="w-full sm:w-64 border border-slate-300 rounded-lg px-4 py-2" value={daireAmount} onChange={e => setDaireAmount(e.target.value)} />
@@ -1455,21 +1360,16 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
         </div>
       )}
 
-      {}
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-x-auto" id="units-print-table">
         <div className="print-only mb-6 text-center border-b-2 border-slate-800 pb-4">
           <h2 className="text-2xl font-bold uppercase tracking-wide">Yükseller Apartmanı - Daire ve Dükkan Listesi</h2>
-          <p className="text-slate-600">Filtre: {filterStatus === 'debt' ? 'Borçlular' : filterStatus === 'nodebt' ? 'Borcu Olmayanlar / Alacaklılar' : 'Tümü'} | Tarih: {new Date().toLocaleDateString('tr-TR')}</p>
+          <p className="text-slate-600">Filtre: {filterStatus === 'debt' ? 'Borçlular' : filterStatus === 'nodebt' ? 'Borcu Olmayanlar' : 'Tümü'} | Tarih: {new Date().toLocaleDateString('tr-TR')}</p>
         </div>
 
         <table className="w-full text-left border-collapse min-w-[800px]">
           <thead>
             <tr className="bg-slate-50 text-slate-500 text-sm border-b border-slate-100">
-              <th className="p-4 font-medium">Birim</th>
-              <th className="p-4 font-medium">Sakin / Durum</th>
-              <th className="p-4 font-medium no-print">İletişim</th>
-              <th className="p-4 font-medium">Bakiye</th>
-              <th className="p-4 font-medium text-right no-print">İşlemler</th>
+              <th className="p-4 font-medium">Birim</th><th className="p-4 font-medium">Sakin / Durum</th><th className="p-4 font-medium">İletişim</th><th className="p-4 font-medium">Bakiye</th><th className="p-4 font-medium text-right no-print">İşlemler</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -1486,9 +1386,9 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
                     <td className="p-4"><div className="font-medium text-slate-800 flex items-center">{unit.type === 'daire' ? <Home size={16} className="text-slate-400 mr-2"/> : <Store size={16} className="text-slate-400 mr-2"/>}{unit.name}</div></td>
                     <td className="p-4">
                       <div className="font-medium text-slate-700">{residentName}</div>
-                      <div className="flex items-center mt-1 no-print"><span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${isTenant ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>{isTenant ? 'Kiracı Oturuyor' : 'Mal Sahibi'}</span></div>
+                      <div className="flex items-center mt-1"><span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${isTenant ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>{isTenant ? 'Kiracı Oturuyor' : 'Mal Sahibi'}</span></div>
                     </td>
-                    <td className="p-4 no-print"><div className="text-sm text-slate-600 flex items-center">{isTenant ? unit.tenantPhone : unit.ownerPhone ? <><Phone size={12} className="mr-1"/> {isTenant ? unit.tenantPhone : unit.ownerPhone}</> : <span className="text-slate-400 italic">Eksik Bilgi</span>}</div></td>
+                    <td className="p-4"><div className="text-sm text-slate-600 flex items-center">{isTenant ? unit.tenantPhone : unit.ownerPhone ? <><Phone size={12} className="mr-1"/> {isTenant ? unit.tenantPhone : unit.ownerPhone}</> : <span className="text-slate-400 italic">Eksik Bilgi</span>}</div></td>
                     <td className="p-4">
                       <span className={`px-3 py-1 rounded-full text-sm font-medium ${details.balance > 0 ? 'bg-red-100 text-red-700' : details.balance < 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
                         {details.balance > 0 ? `${details.balance.toLocaleString('tr-TR')} TL Borçlu` : details.balance < 0 ? `${Math.abs(details.balance).toLocaleString('tr-TR')} TL Alacaklı` : 'Borcu Yok'}
@@ -2164,7 +2064,7 @@ function AdminReport({ computations, transactions }) {
 }
 
 function AdminAssembly({ units, computations, transactions, settings }) {
-  const [docType, setDocType] = useState('bilanco'); 
+  const [docType, setDocType] = useState('butce'); 
   const [meetingType, setMeetingType] = useState('olagan'); 
   const [meetingDate, setMeetingDate] = useState('');
   const [meetingTime, setMeetingTime] = useState('14:00');
@@ -2180,10 +2080,6 @@ function AdminAssembly({ units, computations, transactions, settings }) {
   const [newYonetim, setNewYonetim] = useState('');
   const [customDenetim, setCustomDenetim] = useState([]);
   const [newDenetim, setNewDenetim] = useState('');
-
-  // Bilanço İçin State'ler
-  const [bilancoStartDate, setBilancoStartDate] = useState('');
-  const [bilancoEndDate, setBilancoEndDate] = useState('');
 
   const addCustomAgenda = () => { if(newAgenda.trim()) { setCustomAgenda([...customAgenda, newAgenda.trim()]); setNewAgenda(''); } };
   const removeCustomAgenda = (idx) => { setCustomAgenda(customAgenda.filter((_, i) => i !== idx)); };
@@ -2268,6 +2164,7 @@ function AdminAssembly({ units, computations, transactions, settings }) {
 
   const totalAnnualBudget = budgetItems.reduce((sum, item) => sum + Number(item.amount || 0), 0);
   
+  // MAL SAHİBİ VE KİRACI PAYLARININ AYRIŞTIRILMASI
   const ownerAnnual = budgetItems.filter(i => i.category.includes('Demirbaş') || i.category.includes('Yatırım')).reduce((sum, i) => sum + Number(i.amount || 0), 0);
   const personelAnnual = budgetItems.filter(i => i.category.includes('Maaş') || i.category.includes('Personel') || i.category.includes('Kıdem')).reduce((sum, i) => sum + Number(i.amount || 0), 0);
   const operatingArsaAnnual = totalAnnualBudget - ownerAnnual - personelAnnual;
@@ -2310,7 +2207,6 @@ function AdminAssembly({ units, computations, transactions, settings }) {
 
         <div className="flex flex-wrap justify-between items-center gap-4">
           <div className="flex flex-wrap gap-2">
-            <button onClick={() => setDocType('bilanco')} className={`px-4 py-2 rounded-lg font-medium transition-colors ${docType === 'bilanco' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Gelir-Gider Tablosu</button>
             <button onClick={() => setDocType('butce')} className={`px-4 py-2 rounded-lg font-medium transition-colors ${docType === 'butce' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>İşletme Projesi (Bütçe)</button>
             <button onClick={() => setDocType('cagri')} className={`px-4 py-2 rounded-lg font-medium transition-colors ${docType === 'cagri' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Çağrı Dilekçesi</button>
             <button onClick={() => setDocType('hazirun')} className={`px-4 py-2 rounded-lg font-medium transition-colors ${docType === 'hazirun' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Hazirun Listesi</button>
@@ -2321,18 +2217,6 @@ function AdminAssembly({ units, computations, transactions, settings }) {
           <button onClick={() => handlePrint('printable-assembly-doc', 'Genel_Kurul_Evraklari')} className="bg-slate-800 hover:bg-slate-900 text-white px-6 py-2 rounded-lg flex items-center shadow-sm transition-colors font-medium"><Printer size={18} className="mr-2" /> Belgeyi PDF İndir</button>
         </div>
       </div>
-
-      {docType === 'bilanco' && (
-        <div className="bg-slate-50 p-5 rounded-xl border border-slate-200 mb-6 no-print flex flex-col sm:flex-row gap-4 items-center">
-            <h3 className="font-semibold text-slate-700 flex items-center whitespace-nowrap"><Filter size={18} className="mr-2"/> Rapor Tarih Aralığı:</h3>
-            <div className="flex gap-2 items-center w-full sm:w-auto bg-white border border-slate-300 px-3 py-2 rounded-lg">
-                <input type="date" className="outline-none text-sm font-medium bg-transparent w-full sm:w-auto" value={bilancoStartDate} onChange={e => setBilancoStartDate(e.target.value)} title="Başlangıç Tarihi" />
-                <span className="text-slate-400 font-bold">-</span>
-                <input type="date" className="outline-none text-sm font-medium bg-transparent w-full sm:w-auto" value={bilancoEndDate} onChange={e => setBilancoEndDate(e.target.value)} title="Bitiş Tarihi" />
-            </div>
-            <p className="text-xs text-slate-500 sm:ml-4">Belirli bir dönemi süzmek için tarih seçin. Geçmiş bakiye otomatik hesaplanarak devreder.</p>
-        </div>
-      )}
 
       {docType === 'butce' && (
         <div className="bg-emerald-50 p-6 rounded-xl border border-emerald-100 no-print animate-in fade-in">
@@ -2378,7 +2262,7 @@ function AdminAssembly({ units, computations, transactions, settings }) {
         </div>
       )}
 
-      {}
+      {/* MANUEL MADDE EKLEME ALANLARI (NO-PRINT) */}
       {docType === 'cagri' && (
         <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 mb-6 no-print">
           <h3 className="font-semibold text-slate-700 mb-2 flex items-center"><PlusCircle size={18} className="mr-2"/> Çağrı Dilekçesine Ek Gündem Maddesi Ekle</h3>
@@ -2430,145 +2314,9 @@ function AdminAssembly({ units, computations, transactions, settings }) {
         </div>
       )}
 
+      {}
       <div className="bg-white p-10 rounded-xl shadow-sm border border-slate-200" id="printable-assembly-doc">
         
-        {docType === 'bilanco' && (() => {
-           // Bilanço Hesaplamaları
-           let devredenGiris = 0;
-           let devredenCikis = 0;
-           let donemGiris = 0;
-           let donemCikis = 0;
-
-           const incomeByCategory = {};
-           const expenseByCategory = {};
-
-           transactions.forEach(t => {
-               if (t.type === 'system_marker' || t.type === 'due' || t.type === 'fixture' || t.type === 'extra' || t.type === 'custom' || t.type === 'penalty') return;
-               
-               let isPast = false;
-               if (bilancoStartDate) {
-                   const tDate = new Date(t.date); tDate.setHours(0, 0, 0, 0);
-                   const sDate = new Date(bilancoStartDate); sDate.setHours(0, 0, 0, 0);
-                   if (tDate < sDate) isPast = true;
-               }
-
-               if (bilancoEndDate && !isPast) {
-                   const tDate = new Date(t.date); tDate.setHours(0, 0, 0, 0);
-                   const eDate = new Date(bilancoEndDate); eDate.setHours(23, 59, 59, 999);
-                   if (tDate > eDate) return; 
-               }
-
-               if (isPast) {
-                   if (t.type === 'payment' || t.type === 'income') devredenGiris += t.amount;
-                   if (t.type === 'expense') devredenCikis += t.amount;
-               } else {
-                   if (t.type === 'payment') {
-                       donemGiris += t.amount;
-                       incomeByCategory['Aidat ve Gecikme Zammı Tahsilatları'] = (incomeByCategory['Aidat ve Gecikme Zammı Tahsilatları'] || 0) + t.amount;
-                   }
-                   if (t.type === 'income') {
-                       donemGiris += t.amount;
-                       incomeByCategory[t.category || 'Diğer Gelir'] = (incomeByCategory[t.category || 'Diğer Gelir'] || 0) + t.amount;
-                   }
-                   if (t.type === 'expense') {
-                       donemCikis += t.amount;
-                       expenseByCategory[t.category || 'Diğer'] = (expenseByCategory[t.category || 'Diğer'] || 0) + t.amount;
-                   }
-               }
-           });
-
-           const devredenBakiye = devredenGiris - devredenCikis;
-           const toplamGirisDahil = devredenBakiye + donemGiris;
-           const finalBakiye = toplamGirisDahil - donemCikis;
-
-           return (
-             <div className="text-slate-900 leading-relaxed text-sm">
-                <h1 className="text-2xl font-bold text-center mb-6 uppercase tracking-wide border-b-2 border-black pb-4">Yükseller Apartmanı<br/>Gelir-Gider Tablosu (Bilanço)</h1>
-                <div className="flex justify-between font-medium mb-6 text-slate-700">
-                  <p><strong>Dönem:</strong> {bilancoStartDate ? new Date(bilancoStartDate).toLocaleDateString('tr-TR') : 'Sistem Başlangıcı'} - {bilancoEndDate ? new Date(bilancoEndDate).toLocaleDateString('tr-TR') : 'Bugün'}</p>
-                  <p><strong>Rapor Tarihi:</strong> {new Date().toLocaleDateString('tr-TR')}</p>
-                </div>
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
-                  <div>
-                    <h3 className="font-bold text-lg mb-2 text-emerald-800 border-b border-emerald-800 pb-1">GELİRLER</h3>
-                    <table className="w-full text-left border-collapse border border-slate-300 mb-2">
-                        <tbody>
-                          {Object.entries(incomeByCategory).sort((a,b) => b[1]-a[1]).map(([cat, amount]) => (
-                            <tr key={cat} className="border-b border-slate-200">
-                                <td className="p-2 border-r border-slate-300">{cat}</td>
-                                <td className="p-2 text-right font-medium">{amount.toLocaleString('tr-TR')} TL</td>
-                            </tr>
-                          ))}
-                          {Object.keys(incomeByCategory).length === 0 && <tr><td colSpan="2" className="p-2 text-center text-slate-500">Dönem içi gelir bulunamadı.</td></tr>}
-                        </tbody>
-                        <tfoot>
-                          <tr className="bg-emerald-50">
-                            <td className="p-2 border-r border-slate-300 font-bold text-emerald-900">DÖNEM İÇİ TOPLAM GELİR</td>
-                            <td className="p-2 text-right font-bold text-emerald-900">{donemGiris.toLocaleString('tr-TR')} TL</td>
-                          </tr>
-                        </tfoot>
-                    </table>
-                  </div>
-
-                  <div>
-                    <h3 className="font-bold text-lg mb-2 text-red-800 border-b border-red-800 pb-1">GİDERLER</h3>
-                    <table className="w-full text-left border-collapse border border-slate-300 mb-2">
-                        <tbody>
-                          {Object.entries(expenseByCategory).sort((a,b) => b[1]-a[1]).map(([cat, amount]) => (
-                            <tr key={cat} className="border-b border-slate-200">
-                                <td className="p-2 border-r border-slate-300">{cat}</td>
-                                <td className="p-2 text-right font-medium">{amount.toLocaleString('tr-TR')} TL</td>
-                            </tr>
-                          ))}
-                          {Object.keys(expenseByCategory).length === 0 && <tr><td colSpan="2" className="p-2 text-center text-slate-500">Dönem içi gider bulunamadı.</td></tr>}
-                        </tbody>
-                        <tfoot>
-                          <tr className="bg-red-50">
-                            <td className="p-2 border-r border-slate-300 font-bold text-red-900">DÖNEM İÇİ TOPLAM GİDER</td>
-                            <td className="p-2 text-right font-bold text-red-900">{donemCikis.toLocaleString('tr-TR')} TL</td>
-                          </tr>
-                        </tfoot>
-                    </table>
-                  </div>
-                </div>
-
-                <div className="w-full sm:w-2/3 mx-auto">
-                    <h3 className="font-bold text-lg mb-2 text-slate-800 border-b border-slate-800 pb-1 text-center">BİLANÇO ÖZETİ</h3>
-                    <table className="w-full text-left border-collapse border-2 border-slate-800">
-                        <tbody>
-                          <tr>
-                             <td className="p-3 border-b border-r border-slate-300 font-medium">Önceki Dönemden Devreden Kasa:</td>
-                             <td className="p-3 border-b border-slate-300 text-right font-bold">{devredenBakiye.toLocaleString('tr-TR')} TL</td>
-                          </tr>
-                          <tr>
-                             <td className="p-3 border-b border-r border-slate-300 font-medium text-emerald-700">Dönem İçi Toplam Gelir (+):</td>
-                             <td className="p-3 border-b border-slate-300 text-right font-bold text-emerald-700">{donemGiris.toLocaleString('tr-TR')} TL</td>
-                          </tr>
-                          <tr className="bg-slate-100">
-                             <td className="p-3 border-b border-r border-slate-300 font-bold">TOPLAM KASA GİRİŞİ (Devir + Gelir):</td>
-                             <td className="p-3 border-b border-slate-300 text-right font-bold">{toplamGirisDahil.toLocaleString('tr-TR')} TL</td>
-                          </tr>
-                          <tr>
-                             <td className="p-3 border-b border-r border-slate-300 font-medium text-red-700">Dönem İçi Toplam Gider (-):</td>
-                             <td className="p-3 border-b border-slate-300 text-right font-bold text-red-700">{donemCikis.toLocaleString('tr-TR')} TL</td>
-                          </tr>
-                          <tr className="bg-slate-800 text-white">
-                             <td className="p-3 border-r border-slate-600 font-bold text-lg">DÖNEM SONU KASA / BANKA MEVCUDU:</td>
-                             <td className="p-3 text-right font-bold text-lg">{finalBakiye.toLocaleString('tr-TR')} TL</td>
-                          </tr>
-                        </tbody>
-                    </table>
-                </div>
-
-                <div className="mt-16 pt-8 flex justify-between px-8 text-center">
-                  <div><p className="font-bold mb-8">Yönetim Kurulu</p><p className="border-t border-slate-400 pt-2 w-48 mx-auto">(İmza)</p></div>
-                  <div><p className="font-bold mb-8">Denetim Kurulu</p><p className="border-t border-slate-400 pt-2 w-48 mx-auto">(İmza)</p></div>
-                </div>
-             </div>
-           );
-        })()}
-
         {docType === 'butce' && (
           <div className="text-slate-900 leading-relaxed text-justify">
              <h1 className="text-xl font-bold text-center mb-8 uppercase tracking-wide border-b-2 border-black pb-4">Yükseller Apartmanı Yeni Dönem<br/>Tahmini İşletme Projesi (Bütçe)</h1>
@@ -2793,6 +2541,17 @@ function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransactio
 
   const expenses = transactions.filter(t => t.type === 'expense').filter(t => t.description.toLowerCase().includes(expenseSearch.toLowerCase())).sort((a,b) => new Date(b.date) - new Date(a.date));
 
+  const handleSimulatePayment = () => { 
+    if (balance <= 0) {
+      setSysMessage({ text: "Şu an ödenmesi gereken bir borcunuz bulunmuyor.", type: "error" });
+      setTimeout(() => setSysMessage(null), 4000);
+      return;
+    }
+    onAddTransaction({ type: 'payment', amount: balance, unitId: unitId, description: 'Online Sistem Ödemesi' });
+    setSysMessage({ text: `Teşekkürler, ${balance.toLocaleString('tr-TR')} TL tutarındaki borcunuz sistem üzerinden ödendi.`, type: "success" });
+    setTimeout(() => setSysMessage(null), 4000);
+  };
+
   const now = new Date();
   const isLastDay = now.getDate() === new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
   const isPastNoon = now.getHours() >= 12;
@@ -2864,6 +2623,9 @@ function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransactio
                   <span>Faiz: <strong className="ml-1">{penaltyBalance.toLocaleString('tr-TR')} TL</strong></span>
                   {fixtureBalance > 0 && <span>Demirbaş: <strong className="ml-1">{fixtureBalance.toLocaleString('tr-TR')} TL</strong></span>}
                 </div>
+              )}
+              {balance > 0 && (
+                <button onClick={handleSimulatePayment} className="bg-white text-red-600 px-8 py-3 rounded-full font-bold hover:bg-red-50 transition-colors shadow-lg flex items-center mx-auto"><Wallet size={20} className="mr-2"/> Kart ile Öde (Simülasyon)</button>
               )}
             </div>
 
