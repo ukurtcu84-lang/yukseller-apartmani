@@ -190,9 +190,6 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
   const toUpdate = [];
   const toDelete = [];
   
-  // ÇÖZÜM: Orijinal listeyi bozmamak ve döngü içinde hesaplamaları anlık yansıtmak için bir kopya oluşturuyoruz.
-  let workingTxs = [...currentTransactions]; 
-  
   while (checkDate <= now) {
     const year = checkDate.getFullYear();
     const month = String(checkDate.getMonth() + 1).padStart(2, '0');
@@ -201,16 +198,16 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
     
     if (penaltyApplicationDate > now) break;
 
-    // SÜREKLİ GÜNCELLENEN workingTxs üzerinden filtreleme yapıyoruz
-    const pastTxs = workingTxs.filter(t => 
+    // Hesaplama anında BU AYIN mevcut faiz ve marker kayıtlarını HESAPLAMADAN HARİÇ TUTUYORUZ
+    const pastTxs = currentTransactions.filter(t => 
         new Date(t.date) <= penaltyApplicationDate && 
         t.groupId !== groupId
     );
     
     const { unitBalances } = getBalances(pastTxs, currentUnits);
     
-    const existingPenalties = workingTxs.filter(t => t.groupId === groupId && t.type === 'penalty');
-    const existingMarkers = workingTxs.filter(t => t.groupId === groupId && t.type === 'system_marker');
+    const existingPenalties = currentTransactions.filter(t => t.groupId === groupId && t.type === 'penalty');
+    const existingMarkers = currentTransactions.filter(t => t.groupId === groupId && t.type === 'system_marker');
     
     let monthHasPenalty = false;
     
@@ -218,63 +215,40 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
       const b = unitBalances[unit.id];
       const principal = (b.dueBalance || 0) + (b.fixtureBalance || 0) + (b.extraBalance || 0) + (b.customBalance || 0);
       
+      // HATA DÜZELTMESİ: 1 TL altındaki kuruşluk/hatalı bakiyeleri sıfır kabul ederek sonsuz döngüyü önlüyoruz.
       const expectedAmount = principal >= 1 ? Number((principal * 0.05).toFixed(2)) : 0;
+      
+      // HATA DÜZELTMESİ: .find yerine .filter kullanarak geçmişten kalan olası tüm kopya kayıtları tespit ediyoruz.
       const existingUnitPenalties = existingPenalties.filter(t => t.unitId === unit.id);
       
       if (expectedAmount > 0) {
         monthHasPenalty = true;
         if (existingUnitPenalties.length === 0) {
-          const newTx = { 
-            id: `temp-${Date.now()}-${Math.random()}`, // Sanal listede tanınması için geçici ID
-            date: penaltyApplicationDate.toISOString(), 
-            type: 'penalty', 
-            amount: expectedAmount, 
-            unitId: unit.id, 
-            description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, 
-            groupId: groupId 
-          };
-          toCreate.push(newTx);
-          workingTxs.push(newTx); // Bir sonraki ayın hesaplaması için anında sanal listeye ekle
+          // Faiz hiç yazılmamış, oluştur
+          toCreate.push({ date: penaltyApplicationDate.toISOString(), type: 'penalty', amount: expectedAmount, unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, groupId: groupId });
         } else {
+          // Eğer birden fazla kopya faiz oluşmuşsa ilkini asıl kabul et, diğerlerini temizle.
           const primary = existingUnitPenalties[0];
           if (primary.amount !== expectedAmount) {
             toUpdate.push({ id: primary.id, amount: expectedAmount });
-            // Sanal listede anında güncelle
-            const idx = workingTxs.findIndex(t => t.id === primary.id);
-            if (idx > -1) workingTxs[idx].amount = expectedAmount;
           }
           for (let i = 1; i < existingUnitPenalties.length; i++) {
             toDelete.push({ id: existingUnitPenalties[i].id, type: 'penalty' });
-            // Kopya kayıtları sanal listeden de temizle
-            workingTxs = workingTxs.filter(t => t.id !== existingUnitPenalties[i].id);
           }
         }
       } else {
         if (existingUnitPenalties.length > 0) {
-          existingUnitPenalties.forEach(tx => {
-            toDelete.push({ id: tx.id, type: 'penalty' });
-            workingTxs = workingTxs.filter(t => t.id !== tx.id);
-          });
+          // Ödeme sonradan girilmişse veya veritabanında kopya kayıtlar kalmışsa HEPSİNİ sil.
+          existingUnitPenalties.forEach(tx => toDelete.push({ id: tx.id, type: 'penalty' }));
         }
       }
     });
     
     const existingMarker = existingMarkers[0];
     if (!monthHasPenalty && !existingMarker && existingPenalties.length === 0) {
-       const newMarker = { 
-         id: `temp-marker-${Math.random()}`,
-         date: penaltyApplicationDate.toISOString(), 
-         type: 'system_marker', 
-         amount: 0, 
-         unitId: null, 
-         description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) - ${month}/${year}`, 
-         groupId: groupId 
-       };
-       toCreate.push(newMarker);
-       workingTxs.push(newMarker);
+       toCreate.push({ date: penaltyApplicationDate.toISOString(), type: 'system_marker', amount: 0, unitId: null, description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) - ${month}/${year}`, groupId: groupId });
     } else if (monthHasPenalty && existingMarker) {
        toDelete.push({ id: existingMarker.id, type: 'system_marker' });
-       workingTxs = workingTxs.filter(t => t.id !== existingMarker.id);
     }
 
     checkDate = new Date(year, checkDate.getMonth() + 1, 1);
@@ -394,10 +368,7 @@ export default function App() {
          if (toCreateAll.length > 0 || toUpdate.length > 0 || toDelete.length > 0) {
              const batch = writeBatch(db);
              
-             toCreateAll.forEach(tx => {
-              const { id, ...rest } = tx; // Yukarıda eklenen geçici ID'yi Firebase'e yazmamak için çıkarıyoruz
-              batch.set(doc(collection(db, "transactions")), { ...rest, addedBy: 'Sistem' });
-          });
+             toCreateAll.forEach(tx => batch.set(doc(collection(db, "transactions")), { ...tx, addedBy: 'Sistem' }));
              toUpdate.forEach(tx => batch.update(doc(db, "transactions", tx.id), { amount: tx.amount }));
              toDelete.forEach(tx => batch.delete(doc(db, "transactions", tx.id)));
              
