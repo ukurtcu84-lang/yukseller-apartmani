@@ -204,10 +204,23 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
     if (penaltyApplicationDate > now) break;
 
     // GÜNCEL ÇALIŞMA LİSTEMİZİ (workingTransactions) filtreliyoruz.
-    const pastTxs = workingTransactions.filter(t => 
-        new Date(t.date) <= penaltyApplicationDate && 
-        t.groupId !== groupId
-    );
+    const pastTxs = workingTransactions.filter(t => {
+      if (t.groupId === groupId) return false;
+      
+      const tDate = new Date(t.date);
+      const startOfCurrentMonth = new Date(year, checkDate.getMonth(), 1, 0, 0, 0);
+
+      // TAHSİLATLAR (Ödemeler): Ayın 5'ine kadar yapılan ödemeler kabul edilir.
+      // (4 günlük ekstra sürede yapılan ödemeler faizi engeller)
+      if (t.type === 'payment' || t.type === 'income') {
+          return tDate <= penaltyApplicationDate;
+      } 
+      // BORÇLAR (Aidat, Demirbaş vs.): Sadece GEÇEN AYIN SONUNA KADAR olan borçlar baz alınır.
+      // (İçinde bulunulan ayın 1'inde yansıtılan borç bu ay faize girmez, bir sonraki ay girer)
+      else {
+          return tDate < startOfCurrentMonth;
+      }
+  });
     
     const { unitBalances } = getBalances(pastTxs, currentUnits);
     
