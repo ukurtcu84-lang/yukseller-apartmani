@@ -143,37 +143,61 @@ const getBalances = (txs, units) => {
   let totalKasa = 0, totalGider = 0, totalBekleyenAidat = 0, totalBekleyenFaiz = 0, totalBekleyenDemirbas = 0, totalBekleyenEkstra = 0, totalBekleyenOzel = 0; 
   const unitBalances = {};
 
-  units.forEach(u => unitBalances[u.id] = { due: 0, penalty: 0, payment: 0, fixture: 0, extra: 0, custom: 0, balance: 0, dueBalance: 0, penaltyBalance: 0, fixtureBalance: 0, extraBalance: 0, customBalance: 0 });
+  // Başlangıç değerlerini sıfırlıyoruz (remainingPayment = avans/fazla ödeme)
+  units.forEach(u => unitBalances[u.id] = { balance: 0, dueBalance: 0, penaltyBalance: 0, fixtureBalance: 0, extraBalance: 0, customBalance: 0, remainingPayment: 0 });
 
-  txs.forEach(t => {
+  // 1. ADIM: İşlemleri geçmişten günümüze doğru (kronolojik) sıralıyoruz!
+  const sortedTxs = [...txs].sort((a, b) => new Date(a.date) - new Date(b.date));
+
+  // 2. ADIM: İşlemleri gün gün değerlendirip defter tutuyoruz
+  sortedTxs.forEach(t => {
     if (t.type === 'expense') { totalGider += t.amount; totalKasa -= t.amount; }
     else if (t.type === 'income') { totalKasa += t.amount; }
-    else if (t.type === 'payment') { totalKasa += t.amount; if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].payment += t.amount; }
-    else if (t.type === 'due') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].due += t.amount; }
-    else if (t.type === 'fixture') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].fixture += t.amount; }
-    else if (t.type === 'extra') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].extra += t.amount; }
-    else if (t.type === 'custom') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].custom += t.amount; }
-    else if (t.type === 'penalty') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].penalty += t.amount; }
+    else if (t.type === 'payment') { 
+        totalKasa += t.amount; 
+        if (t.unitId && unitBalances[t.unitId]) {
+            let p = t.amount;
+            const b = unitBalances[t.unitId];
+            
+            // Tahsilat anında o gün var olan borçlar yasa gereği sırasıyla (önce faiz) düşülür
+            if (p >= b.penaltyBalance) { p -= b.penaltyBalance; b.penaltyBalance = 0; } else { b.penaltyBalance -= p; p = 0; }
+            if (p >= b.dueBalance) { p -= b.dueBalance; b.dueBalance = 0; } else { b.dueBalance -= p; p = 0; }
+            if (p >= b.fixtureBalance) { p -= b.fixtureBalance; b.fixtureBalance = 0; } else { b.fixtureBalance -= p; p = 0; }
+            if (p >= b.extraBalance) { p -= b.extraBalance; b.extraBalance = 0; } else { b.extraBalance -= p; p = 0; }
+            if (p >= b.customBalance) { p -= b.customBalance; b.customBalance = 0; } else { b.customBalance -= p; p = 0; }
+            
+            // Eğer ödeme borçlardan fazlaysa, gelecekteki borçlara sayılmak üzere "avans" (fazla ödeme) olarak saklanır
+            b.remainingPayment += p; 
+        }
+    }
+    else if (['due', 'fixture', 'extra', 'custom', 'penalty'].includes(t.type)) {
+        if (t.unitId && unitBalances[t.unitId]) {
+            let d = t.amount;
+            const b = unitBalances[t.unitId];
+            
+            // Yeni bir borç yansıtıldığında, içeride avans (fazla ödeme) varsa önce oradan otomatik düşülür
+            if (b.remainingPayment >= d) { b.remainingPayment -= d; d = 0; } else { d -= b.remainingPayment; b.remainingPayment = 0; }
+            
+            // Avans düştükten sonra kalan tutar ilgili borç hanesine yazılır
+            if (t.type === 'due') b.dueBalance += d;
+            else if (t.type === 'fixture') b.fixtureBalance += d;
+            else if (t.type === 'extra') b.extraBalance += d;
+            else if (t.type === 'custom') b.customBalance += d;
+            else if (t.type === 'penalty') b.penaltyBalance += d;
+        }
+    }
   });
 
-  Object.values(unitBalances).forEach(details => {
-    let remainingPayment = details.payment;
-    
-    // Mahsuplaşma sırası (Önce faiz, sonra ana paralar)
-    if (remainingPayment >= details.penalty) { details.penaltyBalance = 0; remainingPayment -= details.penalty; } else { details.penaltyBalance = details.penalty - remainingPayment; remainingPayment = 0; }
-    if (remainingPayment >= details.due) { details.dueBalance = 0; remainingPayment -= details.due; } else { details.dueBalance = details.due - remainingPayment; remainingPayment = 0; }
-    if (remainingPayment >= details.fixture) { details.fixtureBalance = 0; remainingPayment -= details.fixture; } else { details.fixtureBalance = details.fixture - remainingPayment; remainingPayment = 0; }
-    if (remainingPayment >= details.extra) { details.extraBalance = 0; remainingPayment -= details.extra; } else { details.extraBalance = details.extra - remainingPayment; remainingPayment = 0; }
-    if (remainingPayment >= details.custom) { details.customBalance = 0; remainingPayment -= details.custom; } else { details.customBalance = details.custom - remainingPayment; remainingPayment = 0; }
+  // 3. ADIM: Son güncellemeleri toplam havuzuna aktarıyoruz
+  Object.values(unitBalances).forEach(b => {
+    // Genel bakiye: Tüm borçlar eksi avans (Eğer sonuç pozitifse borçlu, negatifse alacaklı/fazla ödemiş)
+    b.balance = b.dueBalance + b.fixtureBalance + b.extraBalance + b.customBalance + b.penaltyBalance - b.remainingPayment;
 
-    // Eğer remainingPayment > 0 ise kişi alacaklı durumdadır (fazla ödeme). Bakiye eksiye düşmeli.
-    details.balance = details.dueBalance + details.fixtureBalance + details.extraBalance + details.customBalance + details.penaltyBalance - remainingPayment;
-
-    if (details.dueBalance > 0) totalBekleyenAidat += details.dueBalance;
-    if (details.fixtureBalance > 0) totalBekleyenDemirbas += details.fixtureBalance;
-    if (details.extraBalance > 0) totalBekleyenEkstra += details.extraBalance;
-    if (details.customBalance > 0) totalBekleyenOzel += details.customBalance;
-    if (details.penaltyBalance > 0) totalBekleyenFaiz += details.penaltyBalance;
+    if (b.dueBalance > 0) totalBekleyenAidat += b.dueBalance;
+    if (b.fixtureBalance > 0) totalBekleyenDemirbas += b.fixtureBalance;
+    if (b.extraBalance > 0) totalBekleyenEkstra += b.extraBalance;
+    if (b.customBalance > 0) totalBekleyenOzel += b.customBalance;
+    if (b.penaltyBalance > 0) totalBekleyenFaiz += b.penaltyBalance;
   });
 
   return { totalKasa, totalGider, totalBekleyenAidat, totalBekleyenDemirbas, totalBekleyenEkstra, totalBekleyenOzel, totalBekleyenFaiz, unitBalances };
