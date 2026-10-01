@@ -143,61 +143,37 @@ const getBalances = (txs, units) => {
   let totalKasa = 0, totalGider = 0, totalBekleyenAidat = 0, totalBekleyenFaiz = 0, totalBekleyenDemirbas = 0, totalBekleyenEkstra = 0, totalBekleyenOzel = 0; 
   const unitBalances = {};
 
-  // Başlangıç değerlerini sıfırlıyoruz (remainingPayment = avans/fazla ödeme)
-  units.forEach(u => unitBalances[u.id] = { balance: 0, dueBalance: 0, penaltyBalance: 0, fixtureBalance: 0, extraBalance: 0, customBalance: 0, remainingPayment: 0 });
+  units.forEach(u => unitBalances[u.id] = { due: 0, penalty: 0, payment: 0, fixture: 0, extra: 0, custom: 0, balance: 0, dueBalance: 0, penaltyBalance: 0, fixtureBalance: 0, extraBalance: 0, customBalance: 0 });
 
-  // 1. ADIM: İşlemleri geçmişten günümüze doğru (kronolojik) sıralıyoruz!
-  const sortedTxs = [...txs].sort((a, b) => new Date(a.date) - new Date(b.date));
-
-  // 2. ADIM: İşlemleri gün gün değerlendirip defter tutuyoruz
-  sortedTxs.forEach(t => {
+  txs.forEach(t => {
     if (t.type === 'expense') { totalGider += t.amount; totalKasa -= t.amount; }
     else if (t.type === 'income') { totalKasa += t.amount; }
-    else if (t.type === 'payment') { 
-        totalKasa += t.amount; 
-        if (t.unitId && unitBalances[t.unitId]) {
-            let p = t.amount;
-            const b = unitBalances[t.unitId];
-            
-            // Tahsilat anında o gün var olan borçlar yasa gereği sırasıyla (önce faiz) düşülür
-            if (p >= b.penaltyBalance) { p -= b.penaltyBalance; b.penaltyBalance = 0; } else { b.penaltyBalance -= p; p = 0; }
-            if (p >= b.dueBalance) { p -= b.dueBalance; b.dueBalance = 0; } else { b.dueBalance -= p; p = 0; }
-            if (p >= b.fixtureBalance) { p -= b.fixtureBalance; b.fixtureBalance = 0; } else { b.fixtureBalance -= p; p = 0; }
-            if (p >= b.extraBalance) { p -= b.extraBalance; b.extraBalance = 0; } else { b.extraBalance -= p; p = 0; }
-            if (p >= b.customBalance) { p -= b.customBalance; b.customBalance = 0; } else { b.customBalance -= p; p = 0; }
-            
-            // Eğer ödeme borçlardan fazlaysa, gelecekteki borçlara sayılmak üzere "avans" (fazla ödeme) olarak saklanır
-            b.remainingPayment += p; 
-        }
-    }
-    else if (['due', 'fixture', 'extra', 'custom', 'penalty'].includes(t.type)) {
-        if (t.unitId && unitBalances[t.unitId]) {
-            let d = t.amount;
-            const b = unitBalances[t.unitId];
-            
-            // Yeni bir borç yansıtıldığında, içeride avans (fazla ödeme) varsa önce oradan otomatik düşülür
-            if (b.remainingPayment >= d) { b.remainingPayment -= d; d = 0; } else { d -= b.remainingPayment; b.remainingPayment = 0; }
-            
-            // Avans düştükten sonra kalan tutar ilgili borç hanesine yazılır
-            if (t.type === 'due') b.dueBalance += d;
-            else if (t.type === 'fixture') b.fixtureBalance += d;
-            else if (t.type === 'extra') b.extraBalance += d;
-            else if (t.type === 'custom') b.customBalance += d;
-            else if (t.type === 'penalty') b.penaltyBalance += d;
-        }
-    }
+    else if (t.type === 'payment') { totalKasa += t.amount; if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].payment += t.amount; }
+    else if (t.type === 'due') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].due += t.amount; }
+    else if (t.type === 'fixture') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].fixture += t.amount; }
+    else if (t.type === 'extra') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].extra += t.amount; }
+    else if (t.type === 'custom') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].custom += t.amount; }
+    else if (t.type === 'penalty') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].penalty += t.amount; }
   });
 
-  // 3. ADIM: Son güncellemeleri toplam havuzuna aktarıyoruz
-  Object.values(unitBalances).forEach(b => {
-    // Genel bakiye: Tüm borçlar eksi avans (Eğer sonuç pozitifse borçlu, negatifse alacaklı/fazla ödemiş)
-    b.balance = b.dueBalance + b.fixtureBalance + b.extraBalance + b.customBalance + b.penaltyBalance - b.remainingPayment;
+  Object.values(unitBalances).forEach(details => {
+    let remainingPayment = details.payment;
+    
+    // Mahsuplaşma sırası (Önce faiz, sonra ana paralar)
+    if (remainingPayment >= details.penalty) { details.penaltyBalance = 0; remainingPayment -= details.penalty; } else { details.penaltyBalance = details.penalty - remainingPayment; remainingPayment = 0; }
+    if (remainingPayment >= details.due) { details.dueBalance = 0; remainingPayment -= details.due; } else { details.dueBalance = details.due - remainingPayment; remainingPayment = 0; }
+    if (remainingPayment >= details.fixture) { details.fixtureBalance = 0; remainingPayment -= details.fixture; } else { details.fixtureBalance = details.fixture - remainingPayment; remainingPayment = 0; }
+    if (remainingPayment >= details.extra) { details.extraBalance = 0; remainingPayment -= details.extra; } else { details.extraBalance = details.extra - remainingPayment; remainingPayment = 0; }
+    if (remainingPayment >= details.custom) { details.customBalance = 0; remainingPayment -= details.custom; } else { details.customBalance = details.custom - remainingPayment; remainingPayment = 0; }
 
-    if (b.dueBalance > 0) totalBekleyenAidat += b.dueBalance;
-    if (b.fixtureBalance > 0) totalBekleyenDemirbas += b.fixtureBalance;
-    if (b.extraBalance > 0) totalBekleyenEkstra += b.extraBalance;
-    if (b.customBalance > 0) totalBekleyenOzel += b.customBalance;
-    if (b.penaltyBalance > 0) totalBekleyenFaiz += b.penaltyBalance;
+    // Eğer remainingPayment > 0 ise kişi alacaklı durumdadır (fazla ödeme). Bakiye eksiye düşmeli.
+    details.balance = details.dueBalance + details.fixtureBalance + details.extraBalance + details.customBalance + details.penaltyBalance - remainingPayment;
+
+    if (details.dueBalance > 0) totalBekleyenAidat += details.dueBalance;
+    if (details.fixtureBalance > 0) totalBekleyenDemirbas += details.fixtureBalance;
+    if (details.extraBalance > 0) totalBekleyenEkstra += details.extraBalance;
+    if (details.customBalance > 0) totalBekleyenOzel += details.customBalance;
+    if (details.penaltyBalance > 0) totalBekleyenFaiz += details.penaltyBalance;
   });
 
   return { totalKasa, totalGider, totalBekleyenAidat, totalBekleyenDemirbas, totalBekleyenEkstra, totalBekleyenOzel, totalBekleyenFaiz, unitBalances };
@@ -205,6 +181,10 @@ const getBalances = (txs, units) => {
 
 const runAutoPenalties = (currentTransactions, currentUnits) => {
   if (currentTransactions.length === 0) return { toCreate: [], toUpdate: [], toDelete: [] };
+  
+  // ÇÖZÜM: Sonsuz döngüyü engellemek için işlemleri tamamen RAM üzerinde (sanal kopya ile) yürütüyoruz.
+  let simulatedTxs = [...currentTransactions];
+
   const sortedTxs = [...currentTransactions].sort((a, b) => new Date(a.date) - new Date(b.date));
   const earliestDate = new Date(sortedTxs[0].date);
   const now = new Date();
@@ -214,40 +194,26 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
   const toUpdate = [];
   const toDelete = [];
   
-  // ÇÖZÜM: SANAL DEFTER (Virtual Ledger)
-  // Her ayın faiz hesaplaması bir sonraki ayı etkilediği için, işlemleri 
-  // Firebase'i beklemeden hafızadaki bu dizide güncelleyerek ilerleyeceğiz.
-  let simulatedTxs = [...currentTransactions];
-  
   while (checkDate <= now) {
     const year = checkDate.getFullYear();
     const month = String(checkDate.getMonth() + 1).padStart(2, '0');
-    const groupId = `auto-penalty-\({year}-\){month}`;
+    const groupId = `auto-penalty-${year}-${month}`;
     const penaltyApplicationDate = new Date(year, checkDate.getMonth(), 5, 12, 0, 0);
     
     if (penaltyApplicationDate > now) break;
 
-    const startOfCheckMonth = new Date(year, checkDate.getMonth(), 1);
+    // Hesaplama anında bu ayın faizini hariç tutuyoruz ve "sanal" listeyi baz alıyoruz
+    const pastTxs = simulatedTxs.filter(t => 
+        new Date(t.date) <= penaltyApplicationDate && 
+        t.groupId !== groupId
+    );
     
-    // İşlemleri eski ve hatalı currentTransactions'dan değil, anlık güncellenen Sanal Defterden süzüyoruz
-    const pastTxs = simulatedTxs.filter(t => {
-        if (t.groupId === groupId) return false; 
-        
-        const tDate = new Date(t.date);
-        if (t.type === 'payment' || t.type === 'income') {
-            return tDate <= penaltyApplicationDate;
-        }
-        return tDate < startOfCheckMonth;
-    });
-    
-    // Geçmiş bakiyeler artık sanal defter üzerinden %100 doğru hesaplanacak
     const { unitBalances } = getBalances(pastTxs, currentUnits);
     
-    const existingPenalties = currentTransactions.filter(t => t.groupId === groupId && t.type === 'penalty');
-    const existingMarkers = currentTransactions.filter(t => t.groupId === groupId && t.type === 'system_marker');
+    const existingPenalties = simulatedTxs.filter(t => t.groupId === groupId && t.type === 'penalty');
+    const existingMarkers = simulatedTxs.filter(t => t.groupId === groupId && t.type === 'system_marker');
     
     let monthHasPenalty = false;
-    const newPenaltiesForSimulation = []; // Bu ayki düzeltmeleri hafızada tutacağımız dizi
     
     currentUnits.forEach((unit) => {
       const b = unitBalances[unit.id];
@@ -258,54 +224,50 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
       
       if (expectedAmount > 0) {
         monthHasPenalty = true;
-        
-        const newTxTemplate = {
-            date: penaltyApplicationDate.toISOString(),
-            type: 'penalty',
-            amount: expectedAmount,
-            unitId: unit.id,
-            groupId: groupId,
-            description: `Oto. Gecikme Tazminatı (%5) - \({month}/\){year}`
-        };
-
-        // Gelecek ayların hesabı doğru yapılsın diye sanal deftere geçici id ile ekliyoruz
-        newPenaltiesForSimulation.push({ ...newTxTemplate, id: existingUnitPenalties.length > 0 ? existingUnitPenalties[0].id : `sim-\({unit.id}-\){groupId}` });
-
-        // Veritabanına (Firebase) gidecek komutlar:
         if (existingUnitPenalties.length === 0) {
-          toCreate.push(newTxTemplate);
+          // Faiz hiç yazılmamış, oluştur
+          const newTx = { date: penaltyApplicationDate.toISOString(), type: 'penalty', amount: expectedAmount, unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, groupId: groupId };
+          toCreate.push(newTx);
+          // Sonraki ayların hesabı bozulmasın diye sanal listeye anında ekle
+          simulatedTxs.push({ ...newTx, id: `temp-create-${Date.now()}-${Math.random()}` });
         } else {
+          // Güncellenmesi gereken faizler
           const primary = existingUnitPenalties[0];
           if (primary.amount !== expectedAmount) {
             toUpdate.push({ id: primary.id, amount: expectedAmount });
+            // Sanal listedeki tutarı hemen düzelt
+            const idx = simulatedTxs.findIndex(t => t.id === primary.id);
+            if (idx !== -1) simulatedTxs[idx] = { ...simulatedTxs[idx], amount: expectedAmount };
           }
+          // Kopya / Fazladan kalan kayıtları temizle
           for (let i = 1; i < existingUnitPenalties.length; i++) {
             toDelete.push({ id: existingUnitPenalties[i].id, type: 'penalty' });
+            simulatedTxs = simulatedTxs.filter(t => t.id !== existingUnitPenalties[i].id);
           }
         }
       } else {
         if (existingUnitPenalties.length > 0) {
-          existingUnitPenalties.forEach(tx => toDelete.push({ id: tx.id, type: 'penalty' }));
+          // Ödeme sonradan girilmişse veya borç sıfırlanmışsa mevcut faizleri sil
+          existingUnitPenalties.forEach(tx => {
+             toDelete.push({ id: tx.id, type: 'penalty' });
+             simulatedTxs = simulatedTxs.filter(t => t.id !== tx.id);
+          });
         }
       }
     });
     
-    // Döngü sonraki aya geçmeden önce Sanal Defteri temizleyip doğru faizleri içine koyuyoruz
-    simulatedTxs = simulatedTxs.filter(t => t.groupId !== groupId);
-    simulatedTxs.push(...newPenaltiesForSimulation);
-
     const existingMarker = existingMarkers[0];
     if (!monthHasPenalty && !existingMarker && existingPenalties.length === 0) {
-       const markerData = { date: penaltyApplicationDate.toISOString(), type: 'system_marker', amount: 0, unitId: null, description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) - \({month}/\){year}`, groupId: groupId };
-       toCreate.push(markerData);
-       simulatedTxs.push({ ...markerData, id: `sim-marker-${groupId}` });
+       const newMarker = { date: penaltyApplicationDate.toISOString(), type: 'system_marker', amount: 0, unitId: null, description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) - ${month}/${year}`, groupId: groupId };
+       toCreate.push(newMarker);
+       simulatedTxs.push({ ...newMarker, id: `temp-marker-${Date.now()}-${Math.random()}` });
     } else if (monthHasPenalty && existingMarker) {
        toDelete.push({ id: existingMarker.id, type: 'system_marker' });
+       simulatedTxs = simulatedTxs.filter(t => t.id !== existingMarker.id);
     }
 
     checkDate = new Date(year, checkDate.getMonth() + 1, 1);
   }
-  
   return { toCreate, toUpdate, toDelete };
 };
 
@@ -410,8 +372,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    // İşlemler her değiştiğinde (ör: Toplu excel yüklendiğinde, manuel tahsilat girildiğinde) 
-    // arka planda faizleri otomatik denetle ve saniyeler içinde düzelt (Oto-Mutabakat)
     if (currentUser === 'admin' && transactions.length > 0 && units.length > 0) {
       const timer = setTimeout(async () => {
          const { toCreate, toUpdate, toDelete } = runAutoPenalties(transactions, units);
@@ -444,7 +404,7 @@ export default function App() {
                console.error("Otomatik faiz mutabakatı yapılamadı:", e);
              }
          }
-      }, 1500); // Excel yüklemelerinde art arda tetiklenmeyi yumuşatmak için gecikme
+      }, 1500); 
       return () => clearTimeout(timer);
     }
   }, [transactions, units, currentUser]);
@@ -2194,7 +2154,6 @@ function AdminAssembly({ units, computations, transactions, settings }) {
   const [customDenetim, setCustomDenetim] = useState([]);
   const [newDenetim, setNewDenetim] = useState('');
 
-  // Bilanço İçin State'ler
   const [bilancoStartDate, setBilancoStartDate] = useState('');
   const [bilancoEndDate, setBilancoEndDate] = useState('');
 
@@ -2391,7 +2350,6 @@ function AdminAssembly({ units, computations, transactions, settings }) {
         </div>
       )}
 
-      {}
       {docType === 'cagri' && (
         <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 mb-6 no-print">
           <h3 className="font-semibold text-slate-700 mb-2 flex items-center"><PlusCircle size={18} className="mr-2"/> Çağrı Dilekçesine Ek Gündem Maddesi Ekle</h3>
@@ -2446,7 +2404,6 @@ function AdminAssembly({ units, computations, transactions, settings }) {
       <div className="bg-white p-10 rounded-xl shadow-sm border border-slate-200" id="printable-assembly-doc">
         
         {docType === 'bilanco' && (() => {
-           // Bilanço Hesaplamaları
            let devredenGiris = 0;
            let devredenCikis = 0;
            let donemGiris = 0;
