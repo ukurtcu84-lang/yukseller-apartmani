@@ -182,10 +182,7 @@ const getBalances = (txs, units) => {
 const runAutoPenalties = (currentTransactions, currentUnits) => {
   if (currentTransactions.length === 0) return { toCreate: [], toUpdate: [], toDelete: [] };
   
-  // 1. ADIM: SADECE manuel girilen işlemleri (aidat, tahsilat, vb.) alalım.
-  // Sistemin geçmişte otomatik ürettiği faiz ve marker'ları (döngüye sebep olanları) filtreliyoruz.
   const baseTxs = currentTransactions.filter(t => !(t.groupId && t.groupId.startsWith('auto-penalty')));
-  
   if (baseTxs.length === 0) return { toCreate: [], toUpdate: [], toDelete: [] };
 
   const sortedBaseTxs = [...baseTxs].sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -193,11 +190,9 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
   const now = new Date();
   
   let checkDate = new Date(earliestDate.getFullYear(), earliestDate.getMonth() + 1, 1);
+  const truthTxs = []; 
+  const memoryTxs = [...baseTxs]; 
   
-  const truthTxs = []; // Sistemin oluşturduğu KUSURSUZ "olması gerekenler" listesi
-  const memoryTxs = [...baseTxs]; // Hesaplamada ay ay üstüne koyacağımız simülasyon listesi
-  
-  // 2. ADIM: Geçmişten bugüne KUSURSUZ bir faiz listesi inşa et (Veritabanından bağımsız)
   while (checkDate <= now) {
     const year = checkDate.getFullYear();
     const month = String(checkDate.getMonth() + 1).padStart(2, '0');
@@ -214,14 +209,13 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
     currentUnits.forEach((unit) => {
       const b = unitBalances[unit.id];
       const principal = (b.dueBalance || 0) + (b.fixtureBalance || 0) + (b.extraBalance || 0) + (b.customBalance || 0);
-      
       const expectedAmount = principal >= 1 ? Number((principal * 0.05).toFixed(2)) : 0;
       
       if (expectedAmount > 0) {
         monthHasPenalty = true;
         const newTx = { type: 'penalty', amount: expectedAmount, unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, date: penaltyDate.toISOString(), groupId: groupId };
         truthTxs.push(newTx);
-        memoryTxs.push(newTx); // Sonraki ayların mahsuplaşmasını doğru hesaplamak için hafızaya ekle
+        memoryTxs.push(newTx);
       }
     });
     
@@ -233,30 +227,22 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
     checkDate = new Date(year, checkDate.getMonth() + 1, 1);
   }
   
-  // 3. ADIM: GERÇEK VERİTABANI İLE KUSURSUZ LİSTEYİ (TRUTH) KIYASLA (Diffing - Döngüyü Kesen Yer)
   const toCreate = [];
   const toUpdate = [];
   const toDelete = [];
   const matchedDbIds = new Set();
-  
-  // Sadece sistemin mevcut veritabanındaki ürettiği kayıtlar
   const dbPenalties = currentTransactions.filter(t => t.groupId && t.groupId.startsWith('auto-penalty'));
   
   truthTxs.forEach(truth => {
     const matchingDbList = dbPenalties.filter(db => db.groupId === truth.groupId && db.unitId === truth.unitId && db.type === truth.type);
-    
     if (matchingDbList.length === 0) {
-      toCreate.push(truth); // Veritabanında yok, oluştur
+      toCreate.push(truth);
     } else {
       const primary = matchingDbList[0];
       matchedDbIds.add(primary.id);
-      
-      // Tutar değişmişse (Virgül hassasiyetiyle kontrol)
       if (Number(primary.amount) !== Number(truth.amount)) {
         toUpdate.push({ id: primary.id, amount: truth.amount }); 
       }
-      
-      // Eğer veritabanında fazla kopya varsa silinmesi için işaretle
       for (let i = 1; i < matchingDbList.length; i++) {
         matchedDbIds.add(matchingDbList[i].id);
         toDelete.push({ id: matchingDbList[i].id });
@@ -264,7 +250,6 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
     }
   });
   
-  // Kusursuz listede OLMAYAN ama veritabanında KALMIŞ eski/yanlış kayıtları sil
   dbPenalties.forEach(db => {
     if (!matchedDbIds.has(db.id)) {
       toDelete.push({ id: db.id });
@@ -374,11 +359,12 @@ export default function App() {
     };
   }, []);
 
+  const isCalculatingRef = useRef(false);
+
   useEffect(() => {
-    // İşlemler her değiştiğinde (ör: Toplu excel yüklendiğinde, manuel tahsilat girildiğinde) 
-    // arka planda faizleri otomatik denetle ve saniyeler içinde düzelt (Oto-Mutabakat)
-    if (currentUser === 'admin' && transactions.length > 0 && units.length > 0) {
+    if (currentUser === 'admin' && transactions.length > 0 && units.length > 0 && !isCalculatingRef.current) {
       const timer = setTimeout(async () => {
+         isCalculatingRef.current = true;
          const { toCreate, toUpdate, toDelete } = runAutoPenalties(transactions, units);
          const newReminders = runAutoReminders(transactions, units);
          const toCreateAll = [...toCreate, ...newReminders];
@@ -392,24 +378,17 @@ export default function App() {
              
              try {
                await batch.commit();
-               let msgs = [];
-               const penaltyCreated = toCreateAll.filter(t => t.type === 'penalty').length;
-               const penaltyDeleted = toDelete.filter(t => t.type === 'penalty').length;
-               const penaltyUpdated = toUpdate.length;
-               
-               if (penaltyCreated > 0) msgs.push(`${penaltyCreated} yeni faiz yansıtıldı`);
-               if (penaltyUpdated > 0) msgs.push(`${penaltyUpdated} faiz güncellendi`);
-               if (penaltyDeleted > 0) msgs.push(`Geçmiş ödeme tespit edildi, ${penaltyDeleted} faiz iptal edildi`);
-               
-               if (msgs.length > 0) {
-                 setAutoToast(`Sistem Oto-Mutabakat: ${msgs.join(' | ')}.`);
-                 setTimeout(() => setAutoToast(null), 8000);
-               }
+               setAutoToast("Sistem Oto-Mutabakat: Faizler güncellendi.");
+               setTimeout(() => setAutoToast(null), 4000);
              } catch (e) {
                console.error("Otomatik faiz mutabakatı yapılamadı:", e);
              }
          }
-      }, 1500); // Excel yüklemelerinde art arda tetiklenmeyi yumuşatmak için gecikme
+         
+         // İşlem bittikten sonra kilidi güvenli bir süre sonra açıyoruz
+         setTimeout(() => { isCalculatingRef.current = false; }, 3000);
+      }, 1500);
+      
       return () => clearTimeout(timer);
     }
   }, [transactions, units, currentUser]);
