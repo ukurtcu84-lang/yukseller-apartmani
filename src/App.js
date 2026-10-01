@@ -182,81 +182,104 @@ const getBalances = (txs, units) => {
 const runAutoPenalties = (currentTransactions, currentUnits) => {
   if (currentTransactions.length === 0) return { toCreate: [], toUpdate: [], toDelete: [] };
   
-  const baseTxs = currentTransactions.filter(t => !(t.groupId && t.groupId.startsWith('auto-penalty')));
-  if (baseTxs.length === 0) return { toCreate: [], toUpdate: [], toDelete: [] };
-
-  const sortedBaseTxs = [...baseTxs].sort((a, b) => new Date(a.date) - new Date(b.date));
-  const earliestDate = new Date(sortedBaseTxs[0].date);
+  // HATA DÜZELTMESİ: Infinite Loop (Sonsuz Döngü) Fix
+  // İşlemleri doğrudan state veya snapshot yerine yerel bir kopya üzerinde yapıyoruz.
+  let workingTransactions = [...currentTransactions];
+  
+  const sortedTxs = [...workingTransactions].sort((a, b) => new Date(a.date) - new Date(b.date));
+  const earliestDate = new Date(sortedTxs[0].date);
   const now = new Date();
   
   let checkDate = new Date(earliestDate.getFullYear(), earliestDate.getMonth() + 1, 1);
-  const truthTxs = []; 
-  const memoryTxs = [...baseTxs]; 
+  const toCreate = [];
+  const toUpdate = [];
+  const toDelete = [];
   
   while (checkDate <= now) {
     const year = checkDate.getFullYear();
     const month = String(checkDate.getMonth() + 1).padStart(2, '0');
     const groupId = `auto-penalty-${year}-${month}`;
-    const penaltyDate = new Date(year, checkDate.getMonth(), 5, 12, 0, 0);
+    const penaltyApplicationDate = new Date(year, checkDate.getMonth(), 5, 12, 0, 0);
     
-    if (penaltyDate > now) break;
+    if (penaltyApplicationDate > now) break;
 
-    const pastTxs = memoryTxs.filter(t => new Date(t.date) <= penaltyDate);
+    // GÜNCEL ÇALIŞMA LİSTEMİZİ (workingTransactions) filtreliyoruz.
+    const pastTxs = workingTransactions.filter(t => 
+        new Date(t.date) <= penaltyApplicationDate && 
+        t.groupId !== groupId
+    );
+    
     const { unitBalances } = getBalances(pastTxs, currentUnits);
+    
+    const existingPenalties = workingTransactions.filter(t => t.groupId === groupId && t.type === 'penalty');
+    const existingMarkers = workingTransactions.filter(t => t.groupId === groupId && t.type === 'system_marker');
     
     let monthHasPenalty = false;
     
     currentUnits.forEach((unit) => {
       const b = unitBalances[unit.id];
       const principal = (b.dueBalance || 0) + (b.fixtureBalance || 0) + (b.extraBalance || 0) + (b.customBalance || 0);
+      
       const expectedAmount = principal >= 1 ? Number((principal * 0.05).toFixed(2)) : 0;
+      const existingUnitPenalties = existingPenalties.filter(t => t.unitId === unit.id);
       
       if (expectedAmount > 0) {
         monthHasPenalty = true;
-        const newTx = { type: 'penalty', amount: expectedAmount, unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, date: penaltyDate.toISOString(), groupId: groupId };
-        truthTxs.push(newTx);
-        memoryTxs.push(newTx);
+        if (existingUnitPenalties.length === 0) {
+          const newPenalty = { 
+            date: penaltyApplicationDate.toISOString(), type: 'penalty', amount: expectedAmount, 
+            unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, 
+            groupId: groupId, id: `temp-${Date.now()}-${Math.random()}` 
+          };
+          toCreate.push(newPenalty);
+          workingTransactions.push(newPenalty); // Yerel listeye de ekle
+        } else {
+          const primary = existingUnitPenalties[0];
+          if (primary.amount !== expectedAmount) {
+            toUpdate.push({ id: primary.id, amount: expectedAmount });
+            
+            const idx = workingTransactions.findIndex(t => t.id === primary.id);
+            if (idx > -1) workingTransactions[idx] = { ...workingTransactions[idx], amount: expectedAmount };
+          }
+          for (let i = 1; i < existingUnitPenalties.length; i++) {
+            toDelete.push({ id: existingUnitPenalties[i].id, type: 'penalty' });
+            workingTransactions = workingTransactions.filter(t => t.id !== existingUnitPenalties[i].id);
+          }
+        }
+      } else {
+        if (existingUnitPenalties.length > 0) {
+          existingUnitPenalties.forEach(tx => {
+            toDelete.push({ id: tx.id, type: 'penalty' });
+            workingTransactions = workingTransactions.filter(t => t.id !== tx.id);
+          });
+        }
       }
     });
     
-    if (!monthHasPenalty) {
-       const newMarker = { type: 'system_marker', amount: 0, unitId: null, description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) - ${month}/${year}`, date: penaltyDate.toISOString(), groupId: groupId };
-       truthTxs.push(newMarker);
+    const existingMarker = existingMarkers[0];
+    if (!monthHasPenalty && !existingMarker && existingPenalties.length === 0) {
+       const newMarker = { 
+         date: penaltyApplicationDate.toISOString(), type: 'system_marker', amount: 0, 
+         unitId: null, description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) - ${month}/${year}`, 
+         groupId: groupId, id: `temp-${Date.now()}-${Math.random()}` 
+       };
+       toCreate.push(newMarker);
+       workingTransactions.push(newMarker);
+    } else if (monthHasPenalty && existingMarker) {
+       toDelete.push({ id: existingMarker.id, type: 'system_marker' });
+       workingTransactions = workingTransactions.filter(t => t.id !== existingMarker.id);
     }
 
     checkDate = new Date(year, checkDate.getMonth() + 1, 1);
   }
   
-  const toCreate = [];
-  const toUpdate = [];
-  const toDelete = [];
-  const matchedDbIds = new Set();
-  const dbPenalties = currentTransactions.filter(t => t.groupId && t.groupId.startsWith('auto-penalty'));
-  
-  truthTxs.forEach(truth => {
-    const matchingDbList = dbPenalties.filter(db => db.groupId === truth.groupId && db.unitId === truth.unitId && db.type === truth.type);
-    if (matchingDbList.length === 0) {
-      toCreate.push(truth);
-    } else {
-      const primary = matchingDbList[0];
-      matchedDbIds.add(primary.id);
-      if (Number(primary.amount) !== Number(truth.amount)) {
-        toUpdate.push({ id: primary.id, amount: truth.amount }); 
-      }
-      for (let i = 1; i < matchingDbList.length; i++) {
-        matchedDbIds.add(matchingDbList[i].id);
-        toDelete.push({ id: matchingDbList[i].id });
-      }
-    }
+  // Buluta kaydederken geçici ID'leri temizle
+  const cleanToCreate = toCreate.map(t => {
+      const { id, ...rest } = t;
+      return rest;
   });
-  
-  dbPenalties.forEach(db => {
-    if (!matchedDbIds.has(db.id)) {
-      toDelete.push({ id: db.id });
-    }
-  });
-  
-  return { toCreate, toUpdate, toDelete };
+
+  return { toCreate: cleanToCreate, toUpdate, toDelete };
 };
 
 const runAutoReminders = (currentTransactions, currentUnits) => {
