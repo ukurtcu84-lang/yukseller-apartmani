@@ -1,8 +1,8 @@
 import React, { useState, useMemo, useEffect, useRef, useReducer } from 'react';
-import { 
-  Building, Store, Home, Users, Wallet, TrendingUp, TrendingDown, 
-  LogOut, Plus, FileText, CheckCircle, AlertCircle, Edit, Phone, User, 
-  PieChart, Tag, Percent, History, Printer, BookOpen, ClipboardList, 
+import {
+  Building, Store, Home, Users, Wallet, TrendingUp, TrendingDown,
+  LogOut, Plus, FileText, CheckCircle, AlertCircle, Edit, Phone, User,
+  PieChart, Tag, Percent, History, Printer, BookOpen, ClipboardList,
   Upload, Trash2, List, ChevronDown, ChevronUp, PlusCircle, X, Undo, Cpu,
   Search, Filter, Lock, Calculator, Settings, Info, MessageCircle
 } from 'lucide-react';
@@ -121,7 +121,7 @@ const appReducer = (state, action) => {
         sysLogs: [createLog('AYAR GÜNCELLEME', `Sistem bütçe ve maaş parametreleri güncellendi.`, user), ...state.sysLogs]
       };
     }
-    case 'ADD_AUTO_TRANSACTIONS': return state; 
+    case 'ADD_AUTO_TRANSACTIONS': return state;
     default: return state;
   }
 };
@@ -140,7 +140,7 @@ const handlePrint = (elementId, fileName = 'Rapor') => {
 };
 
 const getBalances = (txs, units) => {
-  let totalKasa = 0, totalGider = 0, totalBekleyenAidat = 0, totalBekleyenFaiz = 0, totalBekleyenDemirbas = 0, totalBekleyenEkstra = 0, totalBekleyenOzel = 0; 
+  let totalKasa = 0, totalGider = 0, totalBekleyenAidat = 0, totalBekleyenFaiz = 0, totalBekleyenDemirbas = 0, totalBekleyenEkstra = 0, totalBekleyenOzel = 0;
   const unitBalances = {};
 
   units.forEach(u => unitBalances[u.id] = { due: 0, penalty: 0, payment: 0, fixture: 0, extra: 0, custom: 0, balance: 0, dueBalance: 0, penaltyBalance: 0, fixtureBalance: 0, extraBalance: 0, customBalance: 0 });
@@ -158,15 +158,13 @@ const getBalances = (txs, units) => {
 
   Object.values(unitBalances).forEach(details => {
     let remainingPayment = details.payment;
-    
-    // Mahsuplaşma sırası (Önce faiz, sonra ana paralar)
+
     if (remainingPayment >= details.penalty) { details.penaltyBalance = 0; remainingPayment -= details.penalty; } else { details.penaltyBalance = details.penalty - remainingPayment; remainingPayment = 0; }
     if (remainingPayment >= details.due) { details.dueBalance = 0; remainingPayment -= details.due; } else { details.dueBalance = details.due - remainingPayment; remainingPayment = 0; }
     if (remainingPayment >= details.fixture) { details.fixtureBalance = 0; remainingPayment -= details.fixture; } else { details.fixtureBalance = details.fixture - remainingPayment; remainingPayment = 0; }
     if (remainingPayment >= details.extra) { details.extraBalance = 0; remainingPayment -= details.extra; } else { details.extraBalance = details.extra - remainingPayment; remainingPayment = 0; }
     if (remainingPayment >= details.custom) { details.customBalance = 0; remainingPayment -= details.custom; } else { details.customBalance = details.custom - remainingPayment; remainingPayment = 0; }
 
-    // Eğer remainingPayment > 0 ise kişi alacaklı durumdadır (fazla ödeme). Bakiye eksiye düşmeli.
     details.balance = details.dueBalance + details.fixtureBalance + details.extraBalance + details.customBalance + details.penaltyBalance - remainingPayment;
 
     if (details.dueBalance > 0) totalBekleyenAidat += details.dueBalance;
@@ -181,74 +179,102 @@ const getBalances = (txs, units) => {
 
 const runAutoPenalties = (currentTransactions, currentUnits) => {
   if (currentTransactions.length === 0) return { toCreate: [], toUpdate: [], toDelete: [] };
+
   const sortedTxs = [...currentTransactions].sort((a, b) => new Date(a.date) - new Date(b.date));
   const earliestDate = new Date(sortedTxs[0].date);
   const now = new Date();
-  
+
   let checkDate = new Date(earliestDate.getFullYear(), earliestDate.getMonth() + 1, 1);
   const toCreate = [];
   const toUpdate = [];
   const toDelete = [];
-  
+
+  // Working copy: we modify this as we process each month, so later months
+  // see the CORRECTED state from earlier months. This prevents the cascade
+  // where each run only fixes one month and triggers another run.
+  let workingTxs = [...currentTransactions];
+
   while (checkDate <= now) {
     const year = checkDate.getFullYear();
     const month = String(checkDate.getMonth() + 1).padStart(2, '0');
     const groupId = `auto-penalty-${year}-${month}`;
     const penaltyApplicationDate = new Date(year, checkDate.getMonth(), 5, 12, 0, 0);
-    
+
     if (penaltyApplicationDate > now) break;
 
-    // Hesaplama anında BU AYIN mevcut faiz ve marker kayıtlarını HESAPLAMADAN HARİÇ TUTUYORUZ
-    const pastTxs = currentTransactions.filter(t => 
-        new Date(t.date) <= penaltyApplicationDate && 
-        t.groupId !== groupId
-    );
-    
+    // Remove THIS month's auto-penalty records from the working set so we
+    // can recalculate them from scratch. Previous months' corrected
+    // penalties remain in the working set.
+    workingTxs = workingTxs.filter(t => t.groupId !== groupId);
+
+    // All transactions up to this month's penalty date, from the working set.
+    // This includes corrected penalties from earlier months.
+    const pastTxs = workingTxs.filter(t => new Date(t.date) <= penaltyApplicationDate);
+
     const { unitBalances } = getBalances(pastTxs, currentUnits);
-    
+
     const existingPenalties = currentTransactions.filter(t => t.groupId === groupId && t.type === 'penalty');
     const existingMarkers = currentTransactions.filter(t => t.groupId === groupId && t.type === 'system_marker');
-    
+
     let monthHasPenalty = false;
-    
+    const newPenaltiesThisMonth = [];
+
     currentUnits.forEach((unit) => {
       const b = unitBalances[unit.id];
       const principal = (b.dueBalance || 0) + (b.fixtureBalance || 0) + (b.extraBalance || 0) + (b.customBalance || 0);
-      
-      // HATA DÜZELTMESİ: 1 TL altındaki kuruşluk/hatalı bakiyeleri sıfır kabul ederek sonsuz döngüyü önlüyoruz.
+
       const expectedAmount = principal >= 1 ? Number((principal * 0.05).toFixed(2)) : 0;
-      
-      // HATA DÜZELTMESİ: .find yerine .filter kullanarak geçmişten kalan olası tüm kopya kayıtları tespit ediyoruz.
+
       const existingUnitPenalties = existingPenalties.filter(t => t.unitId === unit.id);
-      
+
       if (expectedAmount > 0) {
         monthHasPenalty = true;
+        const newPenalty = {
+          date: penaltyApplicationDate.toISOString(),
+          type: 'penalty',
+          amount: expectedAmount,
+          unitId: unit.id,
+          description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`,
+          groupId: groupId
+        };
+
         if (existingUnitPenalties.length === 0) {
-          // Faiz hiç yazılmamış, oluştur
-          toCreate.push({ date: penaltyApplicationDate.toISOString(), type: 'penalty', amount: expectedAmount, unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, groupId: groupId });
+          toCreate.push(newPenalty);
         } else {
-          // Eğer birden fazla kopya faiz oluşmuşsa ilkini asıl kabul et, diğerlerini temizle.
           const primary = existingUnitPenalties[0];
-          if (primary.amount !== expectedAmount) {
+          if (Math.abs(primary.amount - expectedAmount) > 0.01) {
             toUpdate.push({ id: primary.id, amount: expectedAmount });
           }
           for (let i = 1; i < existingUnitPenalties.length; i++) {
             toDelete.push({ id: existingUnitPenalties[i].id, type: 'penalty' });
           }
         }
+
+        // Add to working set so next month's calculation sees the correct penalty
+        newPenaltiesThisMonth.push({ ...newPenalty, id: `temp-${groupId}-${unit.id}` });
       } else {
-        if (existingUnitPenalties.length > 0) {
-          // Ödeme sonradan girilmişse veya veritabanında kopya kayıtlar kalmışsa HEPSİNİ sil.
-          existingUnitPenalties.forEach(tx => toDelete.push({ id: tx.id, type: 'penalty' }));
-        }
+        existingUnitPenalties.forEach(tx => toDelete.push({ id: tx.id, type: 'penalty' }));
       }
     });
-    
+
+    // Add this month's corrected penalties to the working set
+    workingTxs = [...workingTxs, ...newPenaltiesThisMonth];
+
+    // Handle system markers
     const existingMarker = existingMarkers[0];
     if (!monthHasPenalty && !existingMarker && existingPenalties.length === 0) {
-       toCreate.push({ date: penaltyApplicationDate.toISOString(), type: 'system_marker', amount: 0, unitId: null, description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) - ${month}/${year}`, groupId: groupId });
+      const marker = {
+        date: penaltyApplicationDate.toISOString(),
+        type: 'system_marker',
+        amount: 0,
+        unitId: null,
+        description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) - ${month}/${year}`,
+        groupId: groupId
+      };
+      toCreate.push(marker);
+      workingTxs = [...workingTxs, { ...marker, id: `temp-marker-${groupId}` }];
     } else if (monthHasPenalty && existingMarker) {
-       toDelete.push({ id: existingMarker.id, type: 'system_marker' });
+      toDelete.push({ id: existingMarker.id, type: 'system_marker' });
     }
 
     checkDate = new Date(year, checkDate.getMonth() + 1, 1);
@@ -260,19 +286,19 @@ const runAutoReminders = (currentTransactions, currentUnits) => {
   if (currentTransactions.length === 0) return [];
   const now = new Date();
   const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  
+
   if (now.getDate() === lastDayOfMonth && now.getHours() >= 12) {
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, '0');
     const groupId = `auto-reminder-${year}-${month}`;
-    
+
     const alreadyProcessed = currentTransactions.some(t => t.groupId === groupId);
-    
+
     if (!alreadyProcessed) {
       const { unitBalances } = getBalances(currentTransactions, currentUnits);
       let debtorsCount = 0;
       currentUnits.forEach((unit) => { if (unitBalances[unit.id].balance > 0) debtorsCount++; });
-      
+
       if (debtorsCount > 0) {
         return [{ id: `reminder-${year}-${month}-${Math.random()}`, date: now.toISOString(), type: 'system_marker', amount: 0, unitId: null, description: `Sistem Bildirimi: ${debtorsCount} borçlu malikin cihazına (Telefon/Bilgisayar) son gün ödeme bildirimi gönderildi.`, groupId: groupId }];
       }
@@ -297,7 +323,7 @@ const getTypeBadge = (type) => {
 };
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState(null); 
+  const [currentUser, setCurrentUser] = useState(null);
   const [autoToast, setAutoToast] = useState(null);
 
   const [state, dispatch] = useReducer(appReducer, {
@@ -312,7 +338,7 @@ export default function App() {
   useEffect(() => {
     const handleWheel = () => {
       if (document.activeElement && document.activeElement.type === 'number') {
-        document.activeElement.blur(); 
+        document.activeElement.blur();
       }
     };
     window.addEventListener('wheel', handleWheel, { passive: true });
@@ -356,44 +382,58 @@ export default function App() {
     };
   }, []);
 
+  const lastNonSystemSignature = useRef('');
+
   useEffect(() => {
-    // İşlemler her değiştiğinde (ör: Toplu excel yüklendiğinde, manuel tahsilat girildiğinde) 
-    // arka planda faizleri otomatik denetle ve saniyeler içinde düzelt (Oto-Mutabakat)
-    if (currentUser === 'admin' && transactions.length > 0 && units.length > 0) {
-      const timer = setTimeout(async () => {
-         const { toCreate, toUpdate, toDelete } = runAutoPenalties(transactions, units);
-         const newReminders = runAutoReminders(transactions, units);
-         const toCreateAll = [...toCreate, ...newReminders];
-         
-         if (toCreateAll.length > 0 || toUpdate.length > 0 || toDelete.length > 0) {
-             const batch = writeBatch(db);
-             
-             toCreateAll.forEach(tx => batch.set(doc(collection(db, "transactions")), { ...tx, addedBy: 'Sistem' }));
-             toUpdate.forEach(tx => batch.update(doc(db, "transactions", tx.id), { amount: tx.amount }));
-             toDelete.forEach(tx => batch.delete(doc(db, "transactions", tx.id)));
-             
-             try {
-               await batch.commit();
-               let msgs = [];
-               const penaltyCreated = toCreateAll.filter(t => t.type === 'penalty').length;
-               const penaltyDeleted = toDelete.filter(t => t.type === 'penalty').length;
-               const penaltyUpdated = toUpdate.length;
-               
-               if (penaltyCreated > 0) msgs.push(`${penaltyCreated} yeni faiz yansıtıldı`);
-               if (penaltyUpdated > 0) msgs.push(`${penaltyUpdated} faiz güncellendi`);
-               if (penaltyDeleted > 0) msgs.push(`Geçmiş ödeme tespit edildi, ${penaltyDeleted} faiz iptal edildi`);
-               
-               if (msgs.length > 0) {
-                 setAutoToast(`Sistem Oto-Mutabakat: ${msgs.join(' | ')}.`);
-                 setTimeout(() => setAutoToast(null), 8000);
-               }
-             } catch (e) {
-               console.error("Otomatik faiz mutabakatı yapılamadı:", e);
-             }
-         }
-      }, 1500); // Excel yüklemelerinde art arda tetiklenmeyi yumuşatmak için gecikme
-      return () => clearTimeout(timer);
-    }
+    if (currentUser !== 'admin' || transactions.length === 0 || units.length === 0) return;
+
+    // Only re-run auto-penalties when USER-created transactions change.
+    // System-generated records (penalties, markers) are excluded from the
+    // signature, so when auto-penalties write to Firebase and the snapshot
+    // re-triggers this effect, the signature stays the same and we skip —
+    // breaking the infinite loop.
+    const nonSystemSignature = transactions
+      .filter(t => t.type !== 'penalty' && t.type !== 'system_marker')
+      .map(t => `${t.id}|${t.date}|${t.type}|${t.amount}|${t.unitId || ''}|${t.description || ''}`)
+      .sort()
+      .join('|||');
+
+    if (nonSystemSignature === lastNonSystemSignature.current) return;
+    lastNonSystemSignature.current = nonSystemSignature;
+
+    const timer = setTimeout(async () => {
+      const { toCreate, toUpdate, toDelete } = runAutoPenalties(transactions, units);
+      const newReminders = runAutoReminders(transactions, units);
+      const toCreateAll = [...toCreate, ...newReminders];
+
+      if (toCreateAll.length > 0 || toUpdate.length > 0 || toDelete.length > 0) {
+        const batch = writeBatch(db);
+
+        toCreateAll.forEach(tx => batch.set(doc(collection(db, "transactions")), { ...tx, addedBy: 'Sistem' }));
+        toUpdate.forEach(tx => batch.update(doc(db, "transactions", tx.id), { amount: tx.amount }));
+        toDelete.forEach(tx => batch.delete(doc(db, "transactions", tx.id)));
+
+        try {
+          await batch.commit();
+          let msgs = [];
+          const penaltyCreated = toCreateAll.filter(t => t.type === 'penalty').length;
+          const penaltyDeleted = toDelete.filter(t => t.type === 'penalty').length;
+          const penaltyUpdated = toUpdate.length;
+
+          if (penaltyCreated > 0) msgs.push(`${penaltyCreated} yeni faiz yansıtıldı`);
+          if (penaltyUpdated > 0) msgs.push(`${penaltyUpdated} faiz güncellendi`);
+          if (penaltyDeleted > 0) msgs.push(`Geçmiş ödeme tespit edildi, ${penaltyDeleted} faiz iptal edildi`);
+
+          if (msgs.length > 0) {
+            setAutoToast(`Sistem Oto-Mutabakat: ${msgs.join(' | ')}.`);
+            setTimeout(() => setAutoToast(null), 8000);
+          }
+        } catch (e) {
+          console.error("Otomatik faiz mutabakatı yapılamadı:", e);
+        }
+      }
+    }, 1500);
+    return () => clearTimeout(timer);
   }, [transactions, units, currentUser]);
 
   const computations = useMemo(() => getBalances(transactions, units), [transactions, units]);
@@ -406,7 +446,7 @@ export default function App() {
   const handleLogin = (userId) => {
     setCurrentUser(userId);
   };
-  
+
   const handleLogout = () => setCurrentUser(null);
   const getUserName = () => currentUser === 'admin' ? 'Yönetici' : currentUser;
 
@@ -416,8 +456,8 @@ export default function App() {
         ...transaction, date: transaction.date || new Date().toISOString(), addedBy: getUserName()
       });
       dispatch({ type: 'ADD_TRANSACTION', payload: { transaction, user: getUserName() }});
-    } catch (e) { 
-      console.error("Buluta kaydederken hata oluştu: ", e); 
+    } catch (e) {
+      console.error("Buluta kaydederken hata oluştu: ", e);
       setAutoToast("HATA: İşlem kaydedilemedi! Lütfen Firebase izinlerini kontrol edin.");
       setTimeout(() => setAutoToast(null), 4000);
     }
@@ -427,21 +467,21 @@ export default function App() {
     try {
       const batch = writeBatch(db);
       const groupId = `import-${Date.now()}`;
-      
+
       txsArray.forEach((tx) => {
         const docRef = doc(collection(db, "transactions"));
         batch.set(docRef, {
-          ...tx, 
-          groupId, 
-          date: tx.date || new Date().toISOString(), 
+          ...tx,
+          groupId,
+          date: tx.date || new Date().toISOString(),
           addedBy: getUserName()
         });
       });
-      
+
       await batch.commit();
       dispatch({ type: 'ADD_BULK_TRANSACTIONS', payload: { transactions: txsArray, user: getUserName() }});
-    } catch (e) { 
-      console.error("Toplu işlem kaydedilemedi: ", e); 
+    } catch (e) {
+      console.error("Toplu işlem kaydedilemedi: ", e);
       setAutoToast("HATA: Toplu işlem kaydedilemedi! Firebase izinlerinizi kontrol edin.");
       setTimeout(() => setAutoToast(null), 4000);
     }
@@ -458,11 +498,11 @@ export default function App() {
         if (amount > 0) {
           const docRef = doc(collection(db, "transactions"));
           batch.set(docRef, {
-            date: isoDate, 
-            type, 
-            amount, 
-            unitId: unit.id, 
-            description, 
+            date: isoDate,
+            type,
+            amount,
+            unitId: unit.id,
+            description,
             groupId,
             addedBy: getUserName()
           });
@@ -471,20 +511,20 @@ export default function App() {
 
       await batch.commit();
       dispatch({ type: 'ADD_BULK_DUE', payload: { type, description, user: getUserName() }});
-    } catch (e) { 
-      console.error("Toplu borçlandırma kaydedilemedi: ", e); 
+    } catch (e) {
+      console.error("Toplu borçlandırma kaydedilemedi: ", e);
       setAutoToast("HATA: Toplu borçlandırma kaydedilemedi! Firebase izinlerinizi kontrol edin.");
       setTimeout(() => setAutoToast(null), 4000);
     }
   };
-  
+
   const onUpdateUnit = async (updatedUnit) => {
     try {
       await setDoc(doc(db, "units", String(updatedUnit.id)), updatedUnit, { merge: true });
       dispatch({ type: 'UPDATE_UNIT', payload: { updatedUnit, user: getUserName() }});
       return true;
-    } catch (e) { 
-      console.error("Kişi buluta kaydedilemedi:", e); 
+    } catch (e) {
+      console.error("Kişi buluta kaydedilemedi:", e);
       return false;
     }
   };
@@ -499,8 +539,8 @@ export default function App() {
       await batch.commit();
       dispatch({ type: 'UPDATE_BULK_UNITS', payload: { updatedUnits, user: getUserName() }});
       return true;
-    } catch (e) { 
-      console.error("Kişiler toplu olarak buluta kaydedilemedi:", e); 
+    } catch (e) {
+      console.error("Kişiler toplu olarak buluta kaydedilemedi:", e);
       return false;
     }
   };
@@ -509,8 +549,8 @@ export default function App() {
     try {
       await updateDoc(doc(db, "transactions", id), updatedData);
       dispatch({ type: 'EDIT_TRANSACTION', payload: { id, updatedData, user: getUserName() }});
-    } catch (e) { 
-      console.error("Bulutta güncellenirken hata:", e); 
+    } catch (e) {
+      console.error("Bulutta güncellenirken hata:", e);
       setAutoToast("HATA: Güncelleme kaydedilemedi! Firebase izinlerini kontrol edin.");
       setTimeout(() => setAutoToast(null), 4000);
     }
@@ -521,8 +561,8 @@ export default function App() {
       await setDoc(doc(db, "settings", "general"), newSettings, { merge: true });
       dispatch({ type: 'UPDATE_SETTINGS', payload: { newSettings, user: getUserName() }});
       return true;
-    } catch (e) { 
-      console.error("Ayarlar buluta kaydedilemedi:", e); 
+    } catch (e) {
+      console.error("Ayarlar buluta kaydedilemedi:", e);
       return false;
     }
   };
@@ -569,14 +609,14 @@ export default function App() {
     <>
       <style dangerouslySetInnerHTML={{__html: `
         @media print {
-          @page { size: A4 portrait; margin: 15mm; } 
+          @page { size: A4 portrait; margin: 15mm; }
           body { -webkit-print-color-adjust: exact; print-color-adjust: exact; background: white; margin: 0; padding: 0; }
           body * { visibility: hidden; }
           .print-target, .print-target * { visibility: visible !important; }
-          .print-target { position: absolute; left: 0; top: 0; width: 100%; height: auto; margin: 0; padding: 0; background: white; } 
+          .print-target { position: absolute; left: 0; top: 0; width: 100%; height: auto; margin: 0; padding: 0; background: white; }
           .no-print, .no-print * { display: none !important; }
           .print-only { display: block !important; }
-          
+
           .print-target table { page-break-inside: auto; font-size: 10pt; width: 100%; min-width: auto !important; }
           .print-target tr { page-break-inside: avoid; page-break-after: auto; break-inside: avoid; }
           .print-target thead { display: table-header-group; }
@@ -590,10 +630,10 @@ export default function App() {
         @media screen {
           .print-only { display: none !important; }
         }
-        input[type=number]::-webkit-inner-spin-button, 
-        input[type=number]::-webkit-outer-spin-button { 
-          -webkit-appearance: none; 
-          margin: 0; 
+        input[type=number]::-webkit-inner-spin-button,
+        input[type=number]::-webkit-outer-spin-button {
+          -webkit-appearance: none;
+          margin: 0;
         }
         input[type=number] {
           -moz-appearance: textfield;
@@ -608,20 +648,20 @@ export default function App() {
       )}
 
       {!currentUser && <LoginScreen onLogin={handleLogin} units={units} />}
-      
+
       {currentUser === 'admin' && (
-        <AdminDashboard 
+        <AdminDashboard
           units={units} transactions={transactions} sysLogs={sysLogs} computations={computations} lastBilledMonth={lastBilledMonth} settings={settings}
           onAddTransaction={addTransaction} onAddBulkTransactions={addBulkTransactions} onAddBulkDue={addBulkDue}
           onDeleteTransaction={deleteTransaction} onDeleteTransactionGroup={deleteTransactionGroup} onDeleteMultipleTransactions={deleteMultipleTransactions}
-          onEditTransaction={onEditTransaction} onUpdateUnit={onUpdateUnit} onUpdateBulkUnits={onUpdateBulkUnits} onUpdateSettings={onUpdateSettings} onLogout={handleLogout} 
+          onEditTransaction={onEditTransaction} onUpdateUnit={onUpdateUnit} onUpdateBulkUnits={onUpdateBulkUnits} onUpdateSettings={onUpdateSettings} onLogout={handleLogout}
         />
       )}
 
       {currentUser && currentUser !== 'admin' && (
-        <ResidentDashboard 
+        <ResidentDashboard
           unitData={units.find(u => u.id === currentUser)} transactions={transactions} balanceObj={computations.unitBalances[currentUser]}
-          onAddTransaction={addTransaction} onLogout={handleLogout} 
+          onAddTransaction={addTransaction} onLogout={handleLogout}
         />
       )}
 
@@ -682,14 +722,14 @@ function LoginScreen({ onLogin, units }) {
         <div className="flex justify-center mb-6 text-blue-600"><Building size={48} /></div>
         <h1 className="text-2xl font-bold text-center text-slate-800 mb-2">Yükseller Apartmanı</h1>
         <p className="text-slate-500 text-center mb-8">Lütfen giriş yapmak istediğiniz rolü ve şifrenizi girin.</p>
-        
+
         <form onSubmit={handleLoginSubmit} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Giriş Türü / Birim</label>
             <select className="w-full border border-slate-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none bg-white" value={selectedRole} onChange={(e) => { setSelectedRole(e.target.value); setError(''); setPassword(''); }}>
-              <option value="admin">👨‍💼 Yönetici Girişi</option>
-              <optgroup label="Daireler">{units.filter(u => u.type === 'daire').map(u => <option key={u.id} value={u.id}>🏠 {u.name}</option>)}</optgroup>
-              <optgroup label="Dükkanlar">{units.filter(u => u.type === 'dukkan').map(u => <option key={u.id} value={u.id}>🏪 {u.name}</option>)}</optgroup>
+              <option value="admin">Yönetici Girişi</option>
+              <optgroup label="Daireler">{units.filter(u => u.type === 'daire').map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</optgroup>
+              <optgroup label="Dükkanlar">{units.filter(u => u.type === 'dukkan').map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</optgroup>
             </select>
           </div>
           <div>
@@ -704,16 +744,16 @@ function LoginScreen({ onLogin, units }) {
         </form>
 
       </div>
-      
+
       <p className="mt-6 text-[9px] text-slate-400 font-medium uppercase tracking-widest opacity-50">
-        v2.0 • Ukurtcu Management System
+        v2.1 • Ukurtcu Management System
       </p>
     </div>
   );
 }
 
 function AdminDashboard({ units, transactions, sysLogs, computations, lastBilledMonth, settings, onAddTransaction, onAddBulkTransactions, onAddBulkDue, onDeleteTransaction, onDeleteTransactionGroup, onDeleteMultipleTransactions, onEditTransaction, onUpdateUnit, onUpdateBulkUnits, onUpdateSettings, onLogout }) {
-  const [activeTab, setActiveTab] = useState('overview'); 
+  const [activeTab, setActiveTab] = useState('overview');
   const { totalKasa, totalGider, totalBekleyenAidat, totalBekleyenDemirbas, totalBekleyenEkstra, totalBekleyenOzel, totalBekleyenFaiz, unitBalances } = computations;
 
   return (
@@ -798,17 +838,17 @@ function AdminSettings({ settings, onUpdateSettings }) {
       <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
         <h2 className="text-xl font-bold text-slate-800 mb-2 flex items-center"><Settings className="mr-2 text-slate-500" /> Bütçe ve Maaş Parametreleri</h2>
         <p className="text-slate-500 text-sm mb-6 border-b border-slate-100 pb-4">Burada belirlediğiniz güncel oranlar, Genel Kurul sekmesindeki "Akıllı Bütçe Planlayıcı" tarafından baz alınacak ve tüm hesaplamalarda (personel maaşı, SGK maliyeti vs.) otomatik olarak kullanılacaktır.</p>
-        
+
         <form onSubmit={handleSubmit} className="space-y-6 max-w-2xl">
           <div className="bg-blue-50 p-5 rounded-lg border border-blue-100 space-y-4">
             <h3 className="font-bold text-blue-800 flex items-center mb-2"><User className="mr-2" size={18}/> Personel ve Maaş Ayarları</h3>
-            
+
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Tahmini Brüt Asgari Ücret (Aylık TL)</label>
               <input type="number" name="grossMinimumWage" value={formData.grossMinimumWage} onChange={handleChange} required className="w-full border border-slate-300 rounded-lg px-4 py-2 bg-white focus:ring-2 focus:ring-blue-500 outline-none" />
               <p className="text-xs text-slate-500 mt-1">Bu tutar üzerinden işveren SGK payı ve kıdem tazminatı hesaplanır.</p>
             </div>
-            
+
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">SGK İşveren Payı (%)</label>
@@ -818,7 +858,7 @@ function AdminSettings({ settings, onUpdateSettings }) {
                 </div>
                 <p className="text-xs text-slate-500 mt-1">SGK primi işveren payı %21.75'tir. Düzenli ödeme indirimi ile 5 puan inerek <strong>%16.75</strong> olarak uygulanabilir.</p>
               </div>
-              
+
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">İşsizlik Sigortası Payı (%)</label>
                 <div className="relative">
@@ -866,7 +906,7 @@ function AdminOverview({ computations, allTransactions, units }) {
       return matchSearch && matchType;
     })
     .sort((a,b) => new Date(b.date) - new Date(a.date))
-    .slice(0, searchTerm || filterType !== 'all' ? 100 : 8); 
+    .slice(0, searchTerm || filterType !== 'all' ? 100 : 8);
 
   const totalTahsilat = allTransactions.filter(t => t.type === 'payment').reduce((sum, t) => sum + t.amount, 0);
   const totalBorcTahakkuk = allTransactions.filter(t => ['due', 'fixture', 'extra', 'custom', 'penalty'].includes(t.type)).reduce((sum, t) => sum + t.amount, 0);
@@ -1008,7 +1048,7 @@ function AdminOverview({ computations, allTransactions, units }) {
                     {t.description}
                   </p>
                   <p className="text-sm text-slate-500">
-                    {new Date(t.date).toLocaleDateString('tr-TR')} 
+                    {new Date(t.date).toLocaleDateString('tr-TR')}
                     {t.unitId && ` • ${t.unitId.replace('-', ' ')}`}
                     {t.category && ` • Kategori: ${t.category}`}
                   </p>
@@ -1043,7 +1083,7 @@ function StatCard({ title, amount, type, icon }) {
 
 function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddTransaction, onAddBulkTransactions, onAddBulkDue, onDeleteTransaction, onEditTransaction, onUpdateUnit, onUpdateBulkUnits }) {
   const [showBulkModal, setShowBulkModal] = useState(false);
-  const [bulkType, setBulkType] = useState('due'); 
+  const [bulkType, setBulkType] = useState('due');
   const [daireAmount, setDaireAmount] = useState('');
   const [dukkanAmounts, setDukkanAmounts] = useState({});
   const [bulkDesc, setBulkDesc] = useState('');
@@ -1060,7 +1100,7 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
   const [unitImportText, setUnitImportText] = useState('');
   const [unitImportPreview, setUnitImportPreview] = useState(null);
 
-  const [activeAction, setActiveAction] = useState(null); 
+  const [activeAction, setActiveAction] = useState(null);
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
   const [editFormData, setEditFormData] = useState({});
@@ -1075,7 +1115,7 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
   const [editTxFormData, setEditTxFormData] = useState({});
 
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterStatus, setFilterStatus] = useState('all'); 
+  const [filterStatus, setFilterStatus] = useState('all');
   const [ekstreSearchTerm, setEkstreSearchTerm] = useState('');
   const [ekstreFilterType, setEkstreFilterType] = useState('all');
   const [ekstreStartDate, setEkstreStartDate] = useState('');
@@ -1083,7 +1123,7 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
 
   const filteredUnits = units.filter(unit => {
     const balance = unitBalances[unit.id]?.balance || 0;
-    const searchMatch = unit.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    const searchMatch = unit.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
                         (unit.ownerName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
                         (unit.tenantName || '').toLowerCase().includes(searchTerm.toLowerCase());
     let statusMatch = true;
@@ -1138,17 +1178,17 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
     }
   };
 
-  const handleEditSubmit = async (e) => { 
-    e.preventDefault(); 
-    const success = await onUpdateUnit(editFormData); 
+  const handleEditSubmit = async (e) => {
+    e.preventDefault();
+    const success = await onUpdateUnit(editFormData);
     if (success) {
-      closeInlineAction(); 
-      showMessage("Birim bilgileri ve şifre başarıyla güncellendi."); 
+      closeInlineAction();
+      showMessage("Birim bilgileri ve şifre başarıyla güncellendi.");
     } else {
       showMessage("Firebase izin hatası! Kaydedilemedi.", "error");
     }
   };
-  
+
   const handleAddDueSubmit = (e) => {
     e.preventDefault();
     if(addDueAmount && addDueDesc && activeAction) {
@@ -1170,8 +1210,8 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
         if (rawDate.includes('.')) { const parts = rawDate.split('.'); if(parts.length === 3) formattedDate = `${parts[2]}-${parts[1]}-${parts[0]}`; }
         let cleanVal = rawAmount.replace('TL', '').replace('₺', '').trim();
         if (cleanVal.includes(',') && cleanVal.includes('.')) {
-          if (cleanVal.lastIndexOf(',') > cleanVal.lastIndexOf('.')) cleanVal = cleanVal.replace(/\./g, '').replace(',', '.'); else cleanVal = cleanVal.replace(/,/g, ''); 
-        } else if (cleanVal.includes(',')) cleanVal = cleanVal.replace(',', '.'); 
+          if (cleanVal.lastIndexOf(',') > cleanVal.lastIndexOf('.')) cleanVal = cleanVal.replace(/\./g, '').replace(',', '.'); else cleanVal = cleanVal.replace(/,/g, '');
+        } else if (cleanVal.includes(',')) cleanVal = cleanVal.replace(',', '.');
         let amount = parseFloat(cleanVal.replace(/[^0-9.-]+/g,""));
         parsed.push({ id: index, rawUnit, rawDate, rawAmount, unitId: matchedUnit ? matchedUnit.id : null, unitName: matchedUnit ? matchedUnit.name : 'Bilinmiyor / Hata', date: formattedDate, amount: isNaN(amount) ? 0 : amount, isValid: !!matchedUnit && !isNaN(amount) && amount > 0 && formattedDate.length >= 8 });
       }
@@ -1201,11 +1241,11 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
       let rawTenantName = cols[3].trim();
       let rawTenantPhone = cols[4].trim();
       let rawPass = cols[5].trim();
-      
+
       const matchedUnit = units.find(u => u.name.toLowerCase() === rawUnit.toLowerCase() || u.id.toLowerCase() === rawUnit.toLowerCase().replace(' ', '-') || u.name.toLowerCase().replace(' ', '') === rawUnit.toLowerCase().replace(' ', ''));
       let residentStatus = rawTenantName.length > 0 ? 'tenant' : 'owner';
-      
-      parsed.push({ 
+
+      parsed.push({
         id: index, rawUnit, unitId: matchedUnit ? matchedUnit.id : null, unitName: matchedUnit ? matchedUnit.name : 'Bilinmiyor', residentStatus, ownerName: rawOwnerName, ownerPhone: rawOwnerPhone, tenantName: rawTenantName, tenantPhone: rawTenantPhone, password: rawPass || '1234', isValid: !!matchedUnit && (rawOwnerName.length > 0 || rawTenantName.length > 0)
       });
     });
@@ -1215,13 +1255,13 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
   const handleUnitImportSubmit = async () => {
     const validUnits = unitImportPreview.filter(p => p.isValid).map(p => {
       const existingUnit = units.find(u => u.id === p.unitId);
-      return { 
-        ...existingUnit, residentStatus: p.residentStatus, ownerName: p.ownerName, ownerPhone: p.ownerPhone, tenantName: p.tenantName, tenantPhone: p.tenantPhone, password: p.password 
+      return {
+        ...existingUnit, residentStatus: p.residentStatus, ownerName: p.ownerName, ownerPhone: p.ownerPhone, tenantName: p.tenantName, tenantPhone: p.tenantPhone, password: p.password
       };
     });
 
     if(validUnits.length > 0) {
-      const success = await onUpdateBulkUnits(validUnits); 
+      const success = await onUpdateBulkUnits(validUnits);
       if(success) {
         showMessage(`${validUnits.length} adet birimin bilgileri başarıyla güncellendi.`);
         setShowUnitImportModal(false); setUnitImportText(''); setUnitImportPreview(null);
@@ -1265,13 +1305,13 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
         <button onClick={() => handlePrint('units-print-table', 'Birimler_Listesi')} className="bg-slate-800 text-white px-4 py-2 rounded-lg flex items-center hover:bg-slate-900 text-sm font-medium transition-colors shadow-sm"><Printer size={16} className="mr-2"/> PDF İndir / Yazdır</button>
       </div>
 
-      {showImportModal && ( 
+      {showImportModal && (
         <div className="bg-white p-6 rounded-xl shadow-lg border border-emerald-200 mb-6 no-print">
           <div className="flex justify-between items-center mb-4">
             <h3 className="font-bold text-lg text-emerald-800 flex items-center"><Upload size={20} className="mr-2"/> Banka Ekstresi / Excel'den Tahsilat Yükle</h3>
             <button onClick={() => { setShowImportModal(false); setImportPreview(null); setImportText(''); }} className="text-slate-400 hover:text-slate-600">&times;</button>
           </div>
-          
+
           {!importPreview ? (
             <div>
               <div className="bg-emerald-50 text-emerald-800 p-4 rounded-lg text-sm mb-4 border border-emerald-100">
@@ -1283,7 +1323,7 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
                   <li>Aşağıdaki kutuya Yapıştırın (Ctrl+V) ve Kontrol Et butonuna basın.</li>
                 </ol>
               </div>
-              <textarea 
+              <textarea
                 className="w-full h-40 border border-slate-300 rounded-lg p-3 text-sm font-mono focus:ring-2 focus:ring-emerald-500 outline-none"
                 placeholder="Örnek:&#10;Daire 1    12.11.2023    500&#10;Dükkan 2   15.11.2023    750.50"
                 value={importText} onChange={e => setImportText(e.target.value)}
@@ -1319,13 +1359,13 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
         </div>
       )}
 
-      {showUnitImportModal && ( 
+      {showUnitImportModal && (
         <div className="bg-white p-6 rounded-xl shadow-lg border border-indigo-200 mb-6 no-print animate-in fade-in zoom-in-95">
           <div className="flex justify-between items-center mb-4">
             <h3 className="font-bold text-lg text-indigo-800 flex items-center"><Users size={20} className="mr-2"/> Excel'den Toplu Kişi ve Şifre Yükle</h3>
             <button onClick={() => { setShowUnitImportModal(false); setUnitImportPreview(null); setUnitImportText(''); }} className="text-slate-400 hover:text-slate-600">&times;</button>
           </div>
-          
+
           {!unitImportPreview ? (
             <div>
               <div className="bg-indigo-50 text-indigo-800 p-4 rounded-lg text-sm mb-4 border border-indigo-100">
@@ -1337,7 +1377,7 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
                   <li>İlgili hücreleri farenizle seçip Kopyalayın (Ctrl+C). Aşağıdaki kutuya Yapıştırın (Ctrl+V) ve Kontrol Et butonuna basın.</li>
                 </ol>
               </div>
-              <textarea 
+              <textarea
                 className="w-full h-40 border border-slate-300 rounded-lg p-3 text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none whitespace-pre"
                 placeholder="Örnek:&#10;Daire 1    Ahmet Yılmaz    0532111    Ayşe Demir    0555222    1234&#10;Dükkan 45  Mehmet Demir    0555987    (Boş)         (Boş)      9876"
                 value={unitImportText} onChange={e => setUnitImportText(e.target.value)}
@@ -1376,7 +1416,7 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
         </div>
       )}
 
-      {showBulkModal && ( 
+      {showBulkModal && (
         <div className="bg-white p-6 rounded-xl shadow-sm border border-blue-100 mb-6 no-print">
           <h3 className="font-bold text-lg mb-4">Toplu Borçlandırma Ekle</h3>
           <form onSubmit={handleBulkSubmit} className="space-y-4">
@@ -1391,7 +1431,7 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
                 <input type="text" required placeholder="Açıklama / Ay (Örn: Kasım Aidatı, Çatı Onarımı)" className="flex-1 border border-slate-300 rounded-lg px-4 py-2" value={bulkDesc} onChange={e => setBulkDesc(e.target.value)} />
               </div>
             </div>
-            
+
             <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
               <h4 className="font-semibold text-slate-700 mb-3 flex items-center"><Home size={16} className="mr-2"/> Daireler (Toplu Tutar)</h4>
               <input type="number" required placeholder="Tüm daireler için tutar (TL)" className="w-full sm:w-64 border border-slate-300 rounded-lg px-4 py-2" value={daireAmount} onChange={e => setDaireAmount(e.target.value)} />
@@ -1415,7 +1455,6 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
         </div>
       )}
 
-      {}
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-x-auto" id="units-print-table">
         <div className="print-only mb-6 text-center border-b-2 border-slate-800 pb-4">
           <h2 className="text-2xl font-bold uppercase tracking-wide">Yükseller Apartmanı - Daire ve Dükkan Listesi</h2>
@@ -1476,7 +1515,7 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
                       <td colSpan="5" className="p-0">
                         <div className="p-4 sm:p-6 bg-white m-3 rounded-xl border border-slate-200 relative shadow-sm">
                           <button onClick={closeInlineAction} className="absolute top-4 right-4 text-slate-400 hover:text-slate-700 p-1">&times; Kapat</button>
-                          
+
                           {activeAction.type === 'payment' && (
                             <div className="pr-12"><h3 className="font-bold text-lg mb-4 text-emerald-800">Tahsilat Gir: {unit.name}</h3><form onSubmit={handlePaymentSubmit} className="flex flex-col sm:flex-row gap-4"><input type="date" required className="w-full sm:w-40 border border-slate-300 rounded-lg px-4 py-2" value={paymentDate} onChange={e => setPaymentDate(e.target.value)} /><input type="number" required placeholder="Tutar (TL)" className="flex-1 sm:w-32 border border-slate-300 rounded-lg px-4 py-2" value={paymentAmount} onChange={e => setPaymentAmount(e.target.value)} /><div className="flex gap-2"><button type="submit" className="bg-emerald-600 text-white px-6 py-2 rounded-lg hover:bg-emerald-700">Tahsil Et</button><button type="button" onClick={closeInlineAction} className="bg-slate-200 text-slate-700 px-4 py-2 rounded-lg">İptal</button></div></form></div>
                           )}
@@ -1625,7 +1664,7 @@ function AdminExpenses({ transactions, onAddTransaction, onAddBulkTransactions }
   const [filterCat, setFilterCat] = useState('all');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  
+
   const [showImportModal, setShowImportModal] = useState(false);
   const [importText, setImportText] = useState('');
   const [importPreview, setImportPreview] = useState(null);
@@ -1649,7 +1688,7 @@ function AdminExpenses({ transactions, onAddTransaction, onAddBulkTransactions }
 
   const handleParseImport = () => {
     if (!importText.trim()) return;
-    const lines = importText.split('\n'); 
+    const lines = importText.split('\n');
     const parsed = [];
     lines.forEach((line, index) => {
       if (!line.trim()) return;
@@ -1659,20 +1698,20 @@ function AdminExpenses({ transactions, onAddTransaction, onAddBulkTransactions }
         let formattedDate = rawDate;
         if (rawDate.includes('.')) { const parts = rawDate.split('.'); if(parts.length === 3) formattedDate = `${parts[2]}-${parts[1]}-${parts[0]}T12:00:00.000Z`; }
         else if (rawDate.includes('/')) { const parts = rawDate.split('/'); if(parts.length === 3) formattedDate = `${parts[2]}-${parts[1]}-${parts[0]}T12:00:00.000Z`; }
-        
+
         let matchedCat = EXPENSE_CATEGORIES.find(c => c.toLowerCase() === rawCat.toLowerCase()) || 'Diğer';
-        
+
         let cleanVal = rawAmt.replace('TL', '').replace('₺', '').trim();
         if (cleanVal.includes(',') && cleanVal.includes('.')) {
-          if (cleanVal.lastIndexOf(',') > cleanVal.lastIndexOf('.')) cleanVal = cleanVal.replace(/\./g, '').replace(',', '.'); else cleanVal = cleanVal.replace(/,/g, ''); 
-        } else if (cleanVal.includes(',')) cleanVal = cleanVal.replace(',', '.'); 
+          if (cleanVal.lastIndexOf(',') > cleanVal.lastIndexOf('.')) cleanVal = cleanVal.replace(/\./g, '').replace(',', '.'); else cleanVal = cleanVal.replace(/,/g, '');
+        } else if (cleanVal.includes(',')) cleanVal = cleanVal.replace(',', '.');
         let amt = parseFloat(cleanVal.replace(/[^0-9.-]+/g,""));
 
-        parsed.push({ 
-          id: index, rawDate, rawCat, rawDesc, rawAmt, 
-          date: formattedDate, category: matchedCat, description: rawDesc, 
-          amount: isNaN(amt) ? 0 : amt, 
-          isValid: !isNaN(amt) && amt > 0 && formattedDate.length >= 8 && rawDesc.length > 0 
+        parsed.push({
+          id: index, rawDate, rawCat, rawDesc, rawAmt,
+          date: formattedDate, category: matchedCat, description: rawDesc,
+          amount: isNaN(amt) ? 0 : amt,
+          isValid: !isNaN(amt) && amt > 0 && formattedDate.length >= 8 && rawDesc.length > 0
         });
       }
     });
@@ -1680,8 +1719,8 @@ function AdminExpenses({ transactions, onAddTransaction, onAddBulkTransactions }
   };
 
   const handleImportSubmit = () => {
-    const validTxs = importPreview.filter(p => p.isValid).map(p => ({ 
-      type: 'expense', amount: p.amount, category: p.category, description: p.description, date: p.date, unitId: null 
+    const validTxs = importPreview.filter(p => p.isValid).map(p => ({
+      type: 'expense', amount: p.amount, category: p.category, description: p.description, date: p.date, unitId: null
     }));
     if (validTxs.length > 0) {
       onAddBulkTransactions(validTxs);
@@ -1696,11 +1735,11 @@ function AdminExpenses({ transactions, onAddTransaction, onAddBulkTransactions }
   const filteredFinances = financeTransactions.filter(e => {
     const searchMatch = e.description.toLowerCase().includes(searchTerm.toLowerCase());
     const catMatch = filterCat === 'all' || e.category === filterCat;
-    
+
     let dateMatch = true;
     const eDate = new Date(e.date);
     eDate.setHours(0, 0, 0, 0);
-    
+
     if (startDate) {
       const sDate = new Date(startDate);
       sDate.setHours(0, 0, 0, 0);
@@ -1748,7 +1787,7 @@ function AdminExpenses({ transactions, onAddTransaction, onAddBulkTransactions }
         <div className="bg-white p-6 rounded-xl shadow-xl border-2 border-emerald-500 no-print animate-in zoom-in-95 mb-6 relative">
           <button onClick={() => { setShowImportModal(false); setImportPreview(null); setImportText(''); }} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X/></button>
           <h3 className="font-bold text-lg text-emerald-800 flex items-center gap-2 mb-4"><Upload size={20}/> Banka / Excel'den Toplu Gider Yükle</h3>
-          
+
           {!importPreview ? (
             <div className="space-y-4">
               <div className="bg-emerald-50 text-emerald-800 p-4 rounded-lg text-sm border border-emerald-100">
@@ -1833,7 +1872,7 @@ function AdminExpenses({ transactions, onAddTransaction, onAddBulkTransactions }
             <button onClick={() => handlePrint('expenses-print-table', 'Finans_Tablosu')} className="bg-slate-800 text-white px-4 py-1.5 rounded-lg flex items-center justify-center hover:bg-slate-900 text-sm font-medium w-full sm:w-auto shadow-sm transition-colors"><Printer size={16} className="mr-2"/> PDF İndir</button>
           </div>
         </div>
-        
+
         <div className="divide-y divide-slate-100">
           {filteredFinances.map(t => (
             <div key={t.id} className="px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between hover:bg-slate-50 gap-2">
@@ -1868,11 +1907,11 @@ function AdminExpenses({ transactions, onAddTransaction, onAddBulkTransactions }
 }
 
 function AdminHistoryTabs({ transactions, sysLogs, onDeleteTransaction, onDeleteTransactionGroup, onDeleteMultipleTransactions }) {
-  const [activeTab, setActiveTab] = useState('txs'); 
+  const [activeTab, setActiveTab] = useState('txs');
   const [expandedGroups, setExpandedGroups] = useState(new Set());
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('all');
-  
+
   const [selectedIds, setSelectedIds] = useState(new Set());
 
   const toggleSelection = (id) => {
@@ -1936,7 +1975,7 @@ function AdminHistoryTabs({ transactions, sysLogs, onDeleteTransaction, onDelete
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col h-full" id="history-print-table">
-      
+
       <div className="flex justify-between items-center p-6 border-b border-slate-100 bg-slate-50 no-print">
         <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2"><History className="text-slate-500"/> Kayıtlar & Sistem İzi</h2>
         <button onClick={() => handlePrint('history-print-table', 'Islem_Gecmisi')} className="flex items-center gap-2 bg-slate-800 text-white px-4 py-2 rounded-lg font-medium transition hover:bg-slate-900 shadow-sm">
@@ -1967,7 +2006,7 @@ function AdminHistoryTabs({ transactions, sysLogs, onDeleteTransaction, onDelete
                   <input type="text" placeholder="Açıklama/Birim ara..." className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
                 </div>
               </div>
-              
+
               {selectedIds.size > 0 && (
                 <button onClick={() => { onDeleteMultipleTransactions(Array.from(selectedIds)); setSelectedIds(new Set()); }} className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm transition-colors flex items-center gap-2 animate-in fade-in">
                   <Trash2 size={16} /> Seçilenleri Sil ({selectedIds.size})
@@ -1989,9 +2028,9 @@ function AdminHistoryTabs({ transactions, sysLogs, onDeleteTransaction, onDelete
                     <tr className={`hover:bg-slate-50 transition-colors ${expandedGroups.has(item.groupId) ? 'bg-blue-50/30' : ''} ${item.type === 'system_marker' ? 'opacity-60 bg-slate-50' : ''}`}>
                       <td className="p-4 no-print">
                         {item.type !== 'system_marker' && (
-                          <input type="checkbox" className="w-4 h-4 cursor-pointer rounded border-slate-300 text-blue-600" 
-                            checked={item.isGroup ? item.subItems.every(sub => selectedIds.has(sub.id)) : selectedIds.has(item.transactionId)} 
-                            onChange={() => item.isGroup ? toggleGroupSelection(item) : toggleSelection(item.transactionId)} 
+                          <input type="checkbox" className="w-4 h-4 cursor-pointer rounded border-slate-300 text-blue-600"
+                            checked={item.isGroup ? item.subItems.every(sub => selectedIds.has(sub.id)) : selectedIds.has(item.transactionId)}
+                            onChange={() => item.isGroup ? toggleGroupSelection(item) : toggleSelection(item.transactionId)}
                           />
                         )}
                       </td>
@@ -2038,7 +2077,7 @@ function AdminHistoryTabs({ transactions, sysLogs, onDeleteTransaction, onDelete
                 {sysLogs.map(log => (
                   <tr key={log.id} className="hover:bg-slate-50">
                     <td className="p-4 text-slate-500 text-xs whitespace-nowrap">
-                      {new Date(log.date).toLocaleDateString('tr-TR')} <br/> 
+                      {new Date(log.date).toLocaleDateString('tr-TR')} <br/>
                       <span className="font-medium">{new Date(log.date).toLocaleTimeString('tr-TR')}</span>
                     </td>
                     <td className="p-4">
@@ -2068,7 +2107,7 @@ function AdminReport({ computations, transactions }) {
 
   const addCustomItem = () => { if(newItem.trim()) { setCustomItems([...customItems, newItem.trim()]); setNewItem(''); } };
   const removeCustomItem = (idx) => { setCustomItems(customItems.filter((_, i) => i !== idx)); };
-  
+
   return (
     <div className="space-y-6">
       <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 no-print">
@@ -2111,7 +2150,7 @@ function AdminReport({ computations, transactions }) {
           </ul>
           <p className="indent-8">Ayrıca Yönetim Kurulunun, aidatlarını süresinde ödemeyen maliklere karşı Kat Mülkiyeti Kanunu'nun (KMK) 20. maddesi uyarınca aylık %5 gecikme tazminatı işletme ve takip yükümlülüğünü yerine getirdiği görülmüştür.</p>
           <p className="indent-8 font-medium">Netice itibarıyla; yapılan ara denetimlerde, yönetimin görevini layıkıyla, şeffaf ve başarılı bir şekilde yerine getirdiği, Yönetim Kurulunun hesap ve işlemlerinin usulüne tamamen uygun olduğu görülmüştür.</p>
-          
+
           <div className="mt-16 pt-8 flex justify-between px-8 text-center">
             <div><p className="font-bold mb-8">Denetçi</p><p className="border-t border-slate-400 pt-2 w-48 mx-auto">(İmza)</p></div>
             <div><p className="font-bold mb-8">Denetçi</p><p className="border-t border-slate-400 pt-2 w-48 mx-auto">(İmza)</p></div>
@@ -2124,14 +2163,14 @@ function AdminReport({ computations, transactions }) {
 }
 
 function AdminAssembly({ units, computations, transactions, settings }) {
-  const [docType, setDocType] = useState('bilanco'); 
-  const [meetingType, setMeetingType] = useState('olagan'); 
+  const [docType, setDocType] = useState('bilanco');
+  const [meetingType, setMeetingType] = useState('olagan');
   const [meetingDate, setMeetingDate] = useState('');
   const [meetingTime, setMeetingTime] = useState('14:00');
   const [meetingPlace, setMeetingPlace] = useState('Site Toplantı Salonu');
   const [extraAgenda, setExtraAgenda] = useState('Acil onarım konularının görüşülmesi');
 
-  const [inflationRate, setInflationRate] = useState(settings.defaultInflationRate); 
+  const [inflationRate, setInflationRate] = useState(settings.defaultInflationRate);
   const [budgetItems, setBudgetItems] = useState([]);
 
   const [customAgenda, setCustomAgenda] = useState([]);
@@ -2141,7 +2180,6 @@ function AdminAssembly({ units, computations, transactions, settings }) {
   const [customDenetim, setCustomDenetim] = useState([]);
   const [newDenetim, setNewDenetim] = useState('');
 
-  // Bilanço İçin State'ler
   const [bilancoStartDate, setBilancoStartDate] = useState('');
   const [bilancoEndDate, setBilancoEndDate] = useState('');
 
@@ -2159,13 +2197,13 @@ function AdminAssembly({ units, computations, transactions, settings }) {
 
   const handleGenerateBudget = () => {
     const expenses = transactions.filter(t => t.type === 'expense');
-    
+
     let dataMonths = 1;
     if (expenses.length > 0) {
       const dates = expenses.map(e => new Date(e.date).getTime());
       dataMonths = Math.max(1, Math.ceil((Math.max(...dates) - Math.min(...dates)) / (1000 * 60 * 60 * 24 * 30)));
     }
-    
+
     const aggregated = {};
     expenses.forEach(t => { aggregated[t.category] = (aggregated[t.category] || 0) + t.amount; });
 
@@ -2174,12 +2212,12 @@ function AdminAssembly({ units, computations, transactions, settings }) {
       let projectedMonthly = monthlyAvg * (1 + (Number(inflationRate) / 100));
       let months = 12;
       let defaultNote = '';
-      
+
       if (cat === 'Maaş/SGK') {
         const tahminiBrut = Number(settings.grossMinimumWage) || 0;
         const isverenSgkPayi = tahminiBrut * (settings.sgkEmployerRate / 100);
         const issizlikSigortasi = tahminiBrut * (settings.unemploymentRate / 100);
-        
+
         projectedMonthly = tahminiBrut + isverenSgkPayi + issizlikSigortasi;
         defaultNote = `Asgari Brüt: ${tahminiBrut}₺, İşveren SGK+İşsizlik: ${(isverenSgkPayi + issizlikSigortasi).toFixed(0)}₺`;
       } else if (cat === 'Kıdem Tazminatı Fonu') {
@@ -2192,7 +2230,7 @@ function AdminAssembly({ units, computations, transactions, settings }) {
          else if (cat === 'Asansör') projectedMonthly = 2000;
          else if (cat === 'Temizlik') projectedMonthly = 1500;
          else projectedMonthly = 1000;
-         
+
          defaultNote = 'Geçmiş veri bulunmadığı için piyasa tahmini üzerinden eklendi.';
       } else {
          if (cat === 'Elektrik' || cat === 'Su') defaultNote = `Aylık ortalama harcama (${monthlyAvg.toFixed(0)} TL) üzerinden tahmini %${inflationRate} artış uygulanmıştır.`;
@@ -2214,20 +2252,20 @@ function AdminAssembly({ units, computations, transactions, settings }) {
     setBudgetItems(prev => prev.map(item => {
       if (item.id !== id) return item;
       const updatedItem = { ...item, [field]: value };
-      
+
       if (field === 'monthlyAmount' || field === 'months') {
         updatedItem.amount = Number(updatedItem.monthlyAmount) * Number(updatedItem.months);
-      } 
+      }
       else if (field === 'amount') {
         updatedItem.monthlyAmount = Math.round(Number(value) / Number(updatedItem.months));
       }
-      
+
       return updatedItem;
     }));
   };
 
   const totalAnnualBudget = budgetItems.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  
+
   const ownerAnnual = budgetItems.filter(i => i.category.includes('Demirbaş') || i.category.includes('Yatırım')).reduce((sum, i) => sum + Number(i.amount || 0), 0);
   const personelAnnual = budgetItems.filter(i => i.category.includes('Maaş') || i.category.includes('Personel') || i.category.includes('Kıdem')).reduce((sum, i) => sum + Number(i.amount || 0), 0);
   const operatingArsaAnnual = totalAnnualBudget - ownerAnnual - personelAnnual;
@@ -2236,13 +2274,13 @@ function AdminAssembly({ units, computations, transactions, settings }) {
   const personelMonthly = personelAnnual / 12;
   const operatingArsaMonthly = operatingArsaAnnual / 12;
 
-  const totalUnitsCount = units.length; 
-  const totalArsaPayi = 5741; 
+  const totalUnitsCount = units.length;
+  const totalArsaPayi = 5741;
 
   const calculateAidat = (arsaPayi) => {
-    const esitPay = personelMonthly / totalUnitsCount; 
-    const arsaPayiIsletme = operatingArsaMonthly * (arsaPayi / totalArsaPayi); 
-    const arsaPayiYatirim = ownerMonthly * (arsaPayi / totalArsaPayi); 
+    const esitPay = personelMonthly / totalUnitsCount;
+    const arsaPayiIsletme = operatingArsaMonthly * (arsaPayi / totalArsaPayi);
+    const arsaPayiYatirim = ownerMonthly * (arsaPayi / totalArsaPayi);
     return {
       tenant: Math.ceil(esitPay + arsaPayiIsletme),
       owner: Math.ceil(arsaPayiYatirim),
@@ -2254,7 +2292,7 @@ function AdminAssembly({ units, computations, transactions, settings }) {
     <div className="space-y-6">
       <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 no-print">
         <h2 className="text-xl font-bold text-slate-800 mb-4 flex items-center"><BookOpen className="mr-2 text-blue-600" /> Genel Kurul & Bütçe Evrakları</h2>
-        
+
         <div className="mb-4 flex flex-wrap gap-6 bg-blue-50 p-4 rounded-lg border border-blue-100">
           <span className="font-semibold text-blue-800">Toplantı Türü:</span>
           <label className="flex items-center cursor-pointer text-blue-900"><input type="radio" name="meetingType" value="olagan" checked={meetingType === 'olagan'} onChange={(e) => setMeetingType(e.target.value)} className="mr-2" /> Olağan Genel Kurul</label>
@@ -2310,7 +2348,7 @@ function AdminAssembly({ units, computations, transactions, settings }) {
               <button onClick={handleGenerateBudget} className="bg-emerald-600 text-white px-4 py-2 rounded-lg font-medium shadow-sm hover:bg-emerald-700 transition">Hesapla / Yenile</button>
             </div>
           </div>
-          
+
           <div className="bg-white rounded-lg border border-emerald-200 overflow-hidden shadow-sm">
             <table className="w-full text-left">
               <thead className="bg-emerald-100/50 text-emerald-800 text-sm">
@@ -2338,7 +2376,6 @@ function AdminAssembly({ units, computations, transactions, settings }) {
         </div>
       )}
 
-      {}
       {docType === 'cagri' && (
         <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 mb-6 no-print">
           <h3 className="font-semibold text-slate-700 mb-2 flex items-center"><PlusCircle size={18} className="mr-2"/> Çağrı Dilekçesine Ek Gündem Maddesi Ekle</h3>
@@ -2355,7 +2392,7 @@ function AdminAssembly({ units, computations, transactions, settings }) {
           )}
         </div>
       )}
-      
+
       {docType === 'yonetim' && (
         <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 mb-6 no-print">
           <h3 className="font-semibold text-slate-700 mb-2 flex items-center"><PlusCircle size={18} className="mr-2"/> Yönetim Raporuna Ek Paragraf Ekle</h3>
@@ -2391,9 +2428,8 @@ function AdminAssembly({ units, computations, transactions, settings }) {
       )}
 
       <div className="bg-white p-10 rounded-xl shadow-sm border border-slate-200" id="printable-assembly-doc">
-        
+
         {docType === 'bilanco' && (() => {
-           // Bilanço Hesaplamaları
            let devredenGiris = 0;
            let devredenCikis = 0;
            let donemGiris = 0;
@@ -2404,7 +2440,7 @@ function AdminAssembly({ units, computations, transactions, settings }) {
 
            transactions.forEach(t => {
                if (t.type === 'system_marker' || t.type === 'due' || t.type === 'fixture' || t.type === 'extra' || t.type === 'custom' || t.type === 'penalty') return;
-               
+
                let isPast = false;
                if (bilancoStartDate) {
                    const tDate = new Date(t.date); tDate.setHours(0, 0, 0, 0);
@@ -2415,7 +2451,7 @@ function AdminAssembly({ units, computations, transactions, settings }) {
                if (bilancoEndDate && !isPast) {
                    const tDate = new Date(t.date); tDate.setHours(0, 0, 0, 0);
                    const eDate = new Date(bilancoEndDate); eDate.setHours(23, 59, 59, 999);
-                   if (tDate > eDate) return; 
+                   if (tDate > eDate) return;
                }
 
                if (isPast) {
@@ -2448,7 +2484,7 @@ function AdminAssembly({ units, computations, transactions, settings }) {
                   <p><strong>Dönem:</strong> {bilancoStartDate ? new Date(bilancoStartDate).toLocaleDateString('tr-TR') : 'Sistem Başlangıcı'} - {bilancoEndDate ? new Date(bilancoEndDate).toLocaleDateString('tr-TR') : 'Bugün'}</p>
                   <p><strong>Rapor Tarihi:</strong> {new Date().toLocaleDateString('tr-TR')}</p>
                 </div>
-                
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
                   <div>
                     <h3 className="font-bold text-lg mb-2 text-emerald-800 border-b border-emerald-800 pb-1">GELİRLER</h3>
@@ -2535,7 +2571,7 @@ function AdminAssembly({ units, computations, transactions, settings }) {
              <p className="mb-6 text-right"><strong>Hazırlanma Tarihi:</strong> {new Date().toLocaleDateString('tr-TR')}</p>
              <p className="mb-4"><strong>Sayın Kat Malikleri;</strong></p>
              <p className="mb-6 indent-8">Kat mülkiyeti kanunu gereği, apartmanımızın önümüzdeki döneme ait tahmini gelir ve giderlerini belirlemek, hizmetlerin aksamadan yürütülmesini sağlamak amacıyla Yönetim Kurulumuzca hazırlanan İşletme Projesi aşağıda sunulmuştur. Bütçe hesaplamalarında geçmiş dönem gerçek verileri, asgari ücret öngörüleri ve güncel piyasa/enflasyon koşulları dikkate alınmıştır.</p>
-             
+
              <h3 className="font-bold text-lg mb-3 underline">1. Tahmini Gider Tablosu</h3>
              <table className="w-full text-left border-collapse border border-black mb-2 text-sm">
                 <thead><tr className="bg-slate-100">
@@ -2547,7 +2583,7 @@ function AdminAssembly({ units, computations, transactions, settings }) {
                   {budgetItems.map(item => {
                     const isOwnerShare = item.category.includes('Demirbaş') || item.category.includes('Yatırım');
                     const isEqualShare = item.category.includes('Maaş') || item.category.includes('Personel') || item.category.includes('Kıdem');
-                    
+
                     return (
                       <tr key={item.id} className={isEqualShare ? "bg-indigo-50/60" : isOwnerShare ? "bg-orange-50/60" : "bg-emerald-50/60"}>
                         <td className="p-2 border border-black font-medium">
@@ -2591,7 +2627,7 @@ function AdminAssembly({ units, computations, transactions, settings }) {
                   <span className="font-medium text-slate-600">Aylık Demirbaş/Yatırım (Arsa Payı - Mal Sahibi):</span>
                   <span className="font-bold text-orange-600">{ownerMonthly.toLocaleString('tr-TR', { maximumFractionDigits: 2 })} TL</span>
                 </div>
-                
+
                 <table className="w-full mt-6 text-sm border-collapse border border-slate-300 bg-white">
                   <thead className="bg-slate-200 text-slate-800">
                     <tr>
@@ -2624,7 +2660,7 @@ function AdminAssembly({ units, computations, transactions, settings }) {
                   </tbody>
                 </table>
              </div>
-             
+
              <p className="mb-12 indent-8 text-sm italic">* İşbu işletme projesi kat malikleri kurulunda görüşülerek karara bağlanacak olup, onaylanması halinde tebliğ hükmünde sayılacaktır. Ortaya çıkabilecek olağanüstü ve mecburi tamiratlar (çatı, tesisat vs.) için ayrıca ek bütçe kararı alınabilecektir.</p>
              <div className="text-right"><p className="font-bold mb-8">Yükseller Apartmanı Yönetim Kurulu</p><p className="border-t border-black pt-2 inline-block w-48 text-center">İmza</p></div>
           </div>
@@ -2638,7 +2674,7 @@ function AdminAssembly({ units, computations, transactions, settings }) {
             <p className="mb-4 indent-8 text-justify">{meetingType === 'olagan' ? 'Yükseller Apartmanı Kat Malikleri Kurulu, yıllık olağan toplantısını yapmak, geçmiş dönemi değerlendirmek ve yeni dönem bütçesi ile yönetimini belirlemek üzere aşağıda belirtilen gündem maddelerini görüşmek için toplanacaktır.' : 'Yükseller Apartmanı Kat Malikleri Kurulu, apartmanımızı ilgilendiren önemli ve acil konuları görüşmek ve karara bağlamak üzere aşağıda belirtilen gündem maddeleriyle olağanüstü toplanacaktır.'}</p>
             <p className="mb-4 indent-8 text-justify">Toplantı <strong>{meetingDate ? new Date(meetingDate).toLocaleDateString('tr-TR') : '.../.../202..'}</strong> tarihinde, saat <strong>{meetingTime}</strong>'da <strong>{meetingPlace}</strong> adresinde yapılacaktır. Bu toplantıda yeterli çoğunluk sağlanamadığı takdirde, ikinci toplantı bir hafta sonra aynı yer ve saatte çoğunluk aranmaksızın yapılacaktır.</p>
             <p className="mb-8 indent-8 text-justify">Kat Mülkiyeti Kanunu uyarınca alınacak kararlar tüm kat maliklerini bağlayacağından, toplantıya katılmanızı veya kendinizi bir vekille temsil ettirmenizi önemle rica ederiz.</p>
-            
+
             <h2 className="font-bold text-lg mb-3 underline">GÜNDEM MADDELERİ:</h2>
             {meetingType === 'olagan' ? (
               <ol className="list-decimal pl-6 space-y-2 mb-12">
@@ -2738,7 +2774,7 @@ function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransactio
   const fixtureBalance = balanceObj?.fixtureBalance || 0;
   const extraBalance = balanceObj?.extraBalance || 0;
   const customBalance = balanceObj?.customBalance || 0;
-  
+
   const isTenant = unitData.residentStatus === 'tenant';
   const residentName = isTenant ? unitData.tenantName : unitData.ownerName;
 
@@ -2879,7 +2915,7 @@ function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransactio
                <h3 className="text-lg font-bold text-slate-800 flex items-center"><ClipboardList className="mr-2 text-slate-500"/> Şeffaf Bina Giderleri</h3>
                <button onClick={() => handlePrint('resident-expenses-print', 'Bina_Giderleri')} className="text-slate-500 hover:text-slate-800 flex items-center text-sm font-medium"><Printer size={16} className="mr-1"/> PDF İndir / Yazdır</button>
             </div>
-            
+
             <div className="print-only mb-6 text-center border-b-2 border-slate-800 pb-4 mt-4 px-6">
               <h2 className="text-2xl font-bold uppercase">Yükseller Apartmanı - Bina Giderleri Tablosu</h2>
               <p className="text-slate-600">Tarih: {new Date().toLocaleDateString('tr-TR')}</p>
@@ -2907,7 +2943,6 @@ function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransactio
           </div>
         )}
 
-        {}
         <footer className="mt-12 mb-8 text-center no-print">
           <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
             Powered by UKURTCU
