@@ -181,35 +181,33 @@ const getBalances = (txs, units) => {
 
 const runAutoPenalties = (currentTransactions, currentUnits) => {
   if (currentTransactions.length === 0) return { toCreate: [], toUpdate: [], toDelete: [] };
-  const sortedTxs = [...currentTransactions].sort((a, b) => new Date(a.date) - new Date(b.date));
-  const earliestDate = new Date(sortedTxs[0].date);
+  
+  // 1. ADIM: SADECE manuel girilen işlemleri (aidat, tahsilat, vb.) alalım.
+  // Sistemin geçmişte otomatik ürettiği faiz ve marker'ları (döngüye sebep olanları) filtreliyoruz.
+  const baseTxs = currentTransactions.filter(t => !(t.groupId && t.groupId.startsWith('auto-penalty')));
+  
+  if (baseTxs.length === 0) return { toCreate: [], toUpdate: [], toDelete: [] };
+
+  const sortedBaseTxs = [...baseTxs].sort((a, b) => new Date(a.date) - new Date(b.date));
+  const earliestDate = new Date(sortedBaseTxs[0].date);
   const now = new Date();
   
   let checkDate = new Date(earliestDate.getFullYear(), earliestDate.getMonth() + 1, 1);
-  const toCreate = [];
-  const toUpdate = [];
-  const toDelete = [];
   
-  // ÇÖZÜM: Hesaplamaları yaparken geçmiş ayların birbirini sonsuz tetiklememesi için simülasyon array'i
-  let simTxs = currentTransactions.map(t => ({ ...t }));
+  const truthTxs = []; // Sistemin oluşturduğu KUSURSUZ "olması gerekenler" listesi
+  const memoryTxs = [...baseTxs]; // Hesaplamada ay ay üstüne koyacağımız simülasyon listesi
   
+  // 2. ADIM: Geçmişten bugüne KUSURSUZ bir faiz listesi inşa et (Veritabanından bağımsız)
   while (checkDate <= now) {
     const year = checkDate.getFullYear();
     const month = String(checkDate.getMonth() + 1).padStart(2, '0');
     const groupId = `auto-penalty-${year}-${month}`;
-    const penaltyApplicationDate = new Date(year, checkDate.getMonth(), 5, 12, 0, 0);
+    const penaltyDate = new Date(year, checkDate.getMonth(), 5, 12, 0, 0);
     
-    if (penaltyApplicationDate > now) break;
+    if (penaltyDate > now) break;
 
-    const pastTxs = simTxs.filter(t => 
-        new Date(t.date) <= penaltyApplicationDate && 
-        t.groupId !== groupId
-    );
-    
+    const pastTxs = memoryTxs.filter(t => new Date(t.date) <= penaltyDate);
     const { unitBalances } = getBalances(pastTxs, currentUnits);
-    
-    const existingPenalties = simTxs.filter(t => t.groupId === groupId && t.type === 'penalty');
-    const existingMarkers = simTxs.filter(t => t.groupId === groupId && t.type === 'system_marker');
     
     let monthHasPenalty = false;
     
@@ -218,51 +216,61 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
       const principal = (b.dueBalance || 0) + (b.fixtureBalance || 0) + (b.extraBalance || 0) + (b.customBalance || 0);
       
       const expectedAmount = principal >= 1 ? Number((principal * 0.05).toFixed(2)) : 0;
-      const existingUnitPenalties = existingPenalties.filter(t => t.unitId === unit.id);
       
       if (expectedAmount > 0) {
         monthHasPenalty = true;
-        if (existingUnitPenalties.length === 0) {
-          const newTx = { date: penaltyApplicationDate.toISOString(), type: 'penalty', amount: expectedAmount, unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, groupId: groupId };
-          toCreate.push(newTx);
-          // Oluşturulan faizi bir sonraki ayın hesaplamasına dahil etmek için simülasyona ekle
-          simTxs.push({ id: `temp-${unit.id}-${groupId}`, ...newTx });
-        } else {
-          const primary = existingUnitPenalties[0];
-          if (primary.amount !== expectedAmount) {
-            toUpdate.push({ id: primary.id, amount: expectedAmount });
-            // Tutar değiştiyse simülasyonda da anlık olarak güncelle
-            const simIndex = simTxs.findIndex(t => t.id === primary.id);
-            if (simIndex !== -1) simTxs[simIndex].amount = expectedAmount;
-          }
-          // Varsa kopya fazla kayıtları temizle
-          for (let i = 1; i < existingUnitPenalties.length; i++) {
-            toDelete.push({ id: existingUnitPenalties[i].id, type: 'penalty' });
-            simTxs = simTxs.filter(t => t.id !== existingUnitPenalties[i].id);
-          }
-        }
-      } else {
-        if (existingUnitPenalties.length > 0) {
-          existingUnitPenalties.forEach(tx => {
-            toDelete.push({ id: tx.id, type: 'penalty' });
-            simTxs = simTxs.filter(t => t.id !== tx.id);
-          });
-        }
+        const newTx = { type: 'penalty', amount: expectedAmount, unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, date: penaltyDate.toISOString(), groupId: groupId };
+        truthTxs.push(newTx);
+        memoryTxs.push(newTx); // Sonraki ayların mahsuplaşmasını doğru hesaplamak için hafızaya ekle
       }
     });
     
-    const existingMarker = existingMarkers[0];
-    if (!monthHasPenalty && !existingMarker && existingPenalties.length === 0) {
-       const newMarker = { date: penaltyApplicationDate.toISOString(), type: 'system_marker', amount: 0, unitId: null, description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) - ${month}/${year}`, groupId: groupId };
-       toCreate.push(newMarker);
-       simTxs.push({ id: `temp-marker-${groupId}`, ...newMarker });
-    } else if (monthHasPenalty && existingMarker) {
-       toDelete.push({ id: existingMarker.id, type: 'system_marker' });
-       simTxs = simTxs.filter(t => t.id !== existingMarker.id);
+    if (!monthHasPenalty) {
+       const newMarker = { type: 'system_marker', amount: 0, unitId: null, description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) - ${month}/${year}`, date: penaltyDate.toISOString(), groupId: groupId };
+       truthTxs.push(newMarker);
     }
 
     checkDate = new Date(year, checkDate.getMonth() + 1, 1);
   }
+  
+  // 3. ADIM: GERÇEK VERİTABANI İLE KUSURSUZ LİSTEYİ (TRUTH) KIYASLA (Diffing - Döngüyü Kesen Yer)
+  const toCreate = [];
+  const toUpdate = [];
+  const toDelete = [];
+  const matchedDbIds = new Set();
+  
+  // Sadece sistemin mevcut veritabanındaki ürettiği kayıtlar
+  const dbPenalties = currentTransactions.filter(t => t.groupId && t.groupId.startsWith('auto-penalty'));
+  
+  truthTxs.forEach(truth => {
+    const matchingDbList = dbPenalties.filter(db => db.groupId === truth.groupId && db.unitId === truth.unitId && db.type === truth.type);
+    
+    if (matchingDbList.length === 0) {
+      toCreate.push(truth); // Veritabanında yok, oluştur
+    } else {
+      const primary = matchingDbList[0];
+      matchedDbIds.add(primary.id);
+      
+      // Tutar değişmişse (Virgül hassasiyetiyle kontrol)
+      if (Number(primary.amount) !== Number(truth.amount)) {
+        toUpdate.push({ id: primary.id, amount: truth.amount }); 
+      }
+      
+      // Eğer veritabanında fazla kopya varsa silinmesi için işaretle
+      for (let i = 1; i < matchingDbList.length; i++) {
+        matchedDbIds.add(matchingDbList[i].id);
+        toDelete.push({ id: matchingDbList[i].id });
+      }
+    }
+  });
+  
+  // Kusursuz listede OLMAYAN ama veritabanında KALMIŞ eski/yanlış kayıtları sil
+  dbPenalties.forEach(db => {
+    if (!matchedDbIds.has(db.id)) {
+      toDelete.push({ id: db.id });
+    }
+  });
+  
   return { toCreate, toUpdate, toDelete };
 };
 
