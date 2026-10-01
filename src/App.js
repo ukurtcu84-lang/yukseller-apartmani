@@ -181,13 +181,7 @@ const getBalances = (txs, units) => {
 
 const runAutoPenalties = (currentTransactions, currentUnits) => {
   if (currentTransactions.length === 0) return { toCreate: [], toUpdate: [], toDelete: [] };
-  
-  // HATA DÜZELTMESİ: Sabit olan currentTransactions yerine, döngü içinde eşzamanlı güncellenen 
-  // "sanal" bir veritabanı kopyası (virtualTransactions) oluşturuyoruz.
-  // Bu sayede, örneğin Mart ayında bulunan yeni ceza, Nisan ayı hesaplanırken anında hesaba katılabiliyor.
-  let virtualTransactions = [...currentTransactions];
-  
-  const sortedTxs = [...virtualTransactions].sort((a, b) => new Date(a.date) - new Date(b.date));
+  const sortedTxs = [...currentTransactions].sort((a, b) => new Date(a.date) - new Date(b.date));
   const earliestDate = new Date(sortedTxs[0].date);
   const now = new Date();
   
@@ -204,17 +198,29 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
     
     if (penaltyApplicationDate > now) break;
 
-    // Sabit olan currentTransactions yerine sanal listemizi (virtualTransactions) filtreliyoruz.
-    const pastTxs = virtualTransactions.filter(t => 
-        new Date(t.date) <= penaltyApplicationDate && 
-        t.groupId !== groupId
-    );
+    // Kontrol edilen ayın 1. gününü referans alıyoruz
+    const startOfCheckMonth = new Date(year, checkDate.getMonth(), 1);
+    
+    // HESAPLAMA ANINDA BU AYIN mevcut faiz ve marker kayıtlarını HESAPLAMADAN HARİÇ TUTUYORUZ
+    const pastTxs = currentTransactions.filter(t => {
+        if (t.groupId === groupId) return false;
+        
+        const tDate = new Date(t.date);
+        
+        // KURAL 1: Tahsilat ve Gelirler ceza gününe (ayın 5'ine) kadar hesaba katılır ki sakinin ödemesi borçtan düşsün.
+        if (t.type === 'payment' || t.type === 'income') {
+            return tDate <= penaltyApplicationDate;
+        }
+        
+        // KURAL 2: Borçlandırmalar (aidat, demirbaş vb.) SADECE geçmiş aylara aitse faize tabi tutulur.
+        // Böylece bu ayın 1'inde kesilen aidat, bu ayın 5'inde haksız yere faiz yemez.
+        return tDate < startOfCheckMonth;
+    });
     
     const { unitBalances } = getBalances(pastTxs, currentUnits);
     
-    // Yine sanal listemizi baz alıyoruz.
-    const existingPenalties = virtualTransactions.filter(t => t.groupId === groupId && t.type === 'penalty');
-    const existingMarkers = virtualTransactions.filter(t => t.groupId === groupId && t.type === 'system_marker');
+    const existingPenalties = currentTransactions.filter(t => t.groupId === groupId && t.type === 'penalty');
+    const existingMarkers = currentTransactions.filter(t => t.groupId === groupId && t.type === 'system_marker');
     
     let monthHasPenalty = false;
     
@@ -222,52 +228,40 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
       const b = unitBalances[unit.id];
       const principal = (b.dueBalance || 0) + (b.fixtureBalance || 0) + (b.extraBalance || 0) + (b.customBalance || 0);
       
+      // HATA DÜZELTMESİ: 1 TL altındaki kuruşluk/hatalı bakiyeleri sıfır kabul ederek sonsuz döngüyü önlüyoruz.
       const expectedAmount = principal >= 1 ? Number((principal * 0.05).toFixed(2)) : 0;
+      
+      // HATA DÜZELTMESİ: .find yerine .filter kullanarak geçmişten kalan olası tüm kopya kayıtları tespit ediyoruz.
       const existingUnitPenalties = existingPenalties.filter(t => t.unitId === unit.id);
       
       if (expectedAmount > 0) {
         monthHasPenalty = true;
         if (existingUnitPenalties.length === 0) {
           // Faiz hiç yazılmamış, oluştur
-          const newTx = { date: penaltyApplicationDate.toISOString(), type: 'penalty', amount: expectedAmount, unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, groupId: groupId };
-          toCreate.push(newTx);
-          // İlgili ayı işlerken yeni bulduğumuz faizi, SONRAKİ ayların hesaplamasında kullanılması için SANAL LİSTEYE de ekliyoruz!
-          virtualTransactions.push({ ...newTx, id: `temp-create-${Date.now()}-${Math.random()}` });
+          toCreate.push({ date: penaltyApplicationDate.toISOString(), type: 'penalty', amount: expectedAmount, unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, groupId: groupId });
         } else {
           // Eğer birden fazla kopya faiz oluşmuşsa ilkini asıl kabul et, diğerlerini temizle.
           const primary = existingUnitPenalties[0];
           if (primary.amount !== expectedAmount) {
             toUpdate.push({ id: primary.id, amount: expectedAmount });
-            // Değişikliği SANAL LİSTEDE DE anında uyguluyoruz.
-            const idx = virtualTransactions.findIndex(t => t.id === primary.id);
-            if (idx > -1) virtualTransactions[idx] = { ...virtualTransactions[idx], amount: expectedAmount };
           }
           for (let i = 1; i < existingUnitPenalties.length; i++) {
             toDelete.push({ id: existingUnitPenalties[i].id, type: 'penalty' });
-            // Silinen hatalı kopyayı SANAL LİSTEDEN DE siliyoruz.
-            virtualTransactions = virtualTransactions.filter(t => t.id !== existingUnitPenalties[i].id);
           }
         }
       } else {
         if (existingUnitPenalties.length > 0) {
           // Ödeme sonradan girilmişse veya veritabanında kopya kayıtlar kalmışsa HEPSİNİ sil.
-          existingUnitPenalties.forEach(tx => {
-            toDelete.push({ id: tx.id, type: 'penalty' });
-            // SANAL LİSTEDEN DE SİLİYORUZ ki ödeme hesaplamaları sapmasın.
-            virtualTransactions = virtualTransactions.filter(t => t.id !== tx.id);
-          });
+          existingUnitPenalties.forEach(tx => toDelete.push({ id: tx.id, type: 'penalty' }));
         }
       }
     });
     
     const existingMarker = existingMarkers[0];
     if (!monthHasPenalty && !existingMarker && existingPenalties.length === 0) {
-       const newMarker = { date: penaltyApplicationDate.toISOString(), type: 'system_marker', amount: 0, unitId: null, description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) - ${month}/${year}`, groupId: groupId };
-       toCreate.push(newMarker);
-       virtualTransactions.push({ ...newMarker, id: `temp-marker-${Date.now()}` });
+       toCreate.push({ date: penaltyApplicationDate.toISOString(), type: 'system_marker', amount: 0, unitId: null, description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) - ${month}/${year}`, groupId: groupId });
     } else if (monthHasPenalty && existingMarker) {
        toDelete.push({ id: existingMarker.id, type: 'system_marker' });
-       virtualTransactions = virtualTransactions.filter(t => t.id !== existingMarker.id);
     }
 
     checkDate = new Date(year, checkDate.getMonth() + 1, 1);
@@ -376,6 +370,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // İşlemler her değiştiğinde (ör: Toplu excel yüklendiğinde, manuel tahsilat girildiğinde) 
+    // arka planda faizleri otomatik denetle ve saniyeler içinde düzelt (Oto-Mutabakat)
     if (currentUser === 'admin' && transactions.length > 0 && units.length > 0) {
       const timer = setTimeout(async () => {
          const { toCreate, toUpdate, toDelete } = runAutoPenalties(transactions, units);
@@ -408,7 +404,7 @@ export default function App() {
                console.error("Otomatik faiz mutabakatı yapılamadı:", e);
              }
          }
-      }, 1500); 
+      }, 1500); // Excel yüklemelerinde art arda tetiklenmeyi yumuşatmak için gecikme
       return () => clearTimeout(timer);
     }
   }, [transactions, units, currentUser]);
@@ -631,7 +627,7 @@ export default function App() {
           units={units} transactions={transactions} sysLogs={sysLogs} computations={computations} lastBilledMonth={lastBilledMonth} settings={settings}
           onAddTransaction={addTransaction} onAddBulkTransactions={addBulkTransactions} onAddBulkDue={addBulkDue}
           onDeleteTransaction={deleteTransaction} onDeleteTransactionGroup={deleteTransactionGroup} onDeleteMultipleTransactions={deleteMultipleTransactions}
-          onEditTransaction={onEditTransaction} onUpdateUnit={onUpdateUnit} onUpdateBulkUnits={onUpdateSettings} onUpdateSettings={onUpdateSettings} onLogout={handleLogout} 
+          onEditTransaction={onEditTransaction} onUpdateUnit={onUpdateUnit} onUpdateBulkUnits={onUpdateBulkUnits} onUpdateSettings={onUpdateSettings} onLogout={handleLogout} 
         />
       )}
 
@@ -719,7 +715,9 @@ function LoginScreen({ onLogin, units }) {
           </div>
           <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition-colors mt-2 shadow-md">Sisteme Giriş Yap</button>
         </form>
+
       </div>
+      
       <p className="mt-6 text-[9px] text-slate-400 font-medium uppercase tracking-widest opacity-50">
         v2.0 • Ukurtcu Management System
       </p>
@@ -1111,7 +1109,6 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
     setEditingTxId(tx.id);
     setEditTxFormData({ date: new Date(tx.date).toISOString().split('T')[0], type: tx.type, description: tx.description, amount: tx.amount });
   };
-  
   const saveEditedTx = () => {
     if (!editTxFormData.amount || !editTxFormData.description) return showMessage("Tutar ve açıklama boş bırakılamaz!", "error");
     onEditTransaction(editingTxId, { ...editTxFormData, amount: Number(editTxFormData.amount), date: new Date(editTxFormData.date).toISOString() });
@@ -1431,6 +1428,7 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
         </div>
       )}
 
+      {}
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-x-auto" id="units-print-table">
         <div className="print-only mb-6 text-center border-b-2 border-slate-800 pb-4">
           <h2 className="text-2xl font-bold uppercase tracking-wide">Yükseller Apartmanı - Daire ve Dükkan Listesi</h2>
@@ -2353,6 +2351,7 @@ function AdminAssembly({ units, computations, transactions, settings }) {
         </div>
       )}
 
+      {}
       {docType === 'cagri' && (
         <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 mb-6 no-print">
           <h3 className="font-semibold text-slate-700 mb-2 flex items-center"><PlusCircle size={18} className="mr-2"/> Çağrı Dilekçesine Ek Gündem Maddesi Ekle</h3>
@@ -2920,6 +2919,13 @@ function ResidentDashboard({ unitData, transactions, balanceObj, onAddTransactio
             </div>
           </div>
         )}
+
+        {}
+        <footer className="mt-12 mb-8 text-center no-print">
+          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
+            Powered by UKURTCU
+          </p>
+        </footer>
       </div>
     </div>
   );
