@@ -181,9 +181,6 @@ const getBalances = (txs, units) => {
 
 const runAutoPenalties = (currentTransactions, currentUnits) => {
   if (currentTransactions.length === 0) return { toCreate: [], toUpdate: [], toDelete: [] };
-  
-  // Geçmiş tarihli ödeme girildiğinde sonsuz döngüyü önlemek için sanal simülasyon listesi
-  let simulatedTxs = [...currentTransactions];
   const sortedTxs = [...currentTransactions].sort((a, b) => new Date(a.date) - new Date(b.date));
   const earliestDate = new Date(sortedTxs[0].date);
   const now = new Date();
@@ -193,6 +190,11 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
   const toUpdate = [];
   const toDelete = [];
   
+  // ÇÖZÜM: Simülasyon listesi.
+  // Döngü her ayı hesaplarken, yeni oluşturulan veya silinen faizleri buraya anlık yansıtacağız.
+  // Böylece bir sonraki ay, bir önceki ayın yeni faizini görerek doğru hesap yapacak ve sonsuz döngü önlenecek.
+  let simulatedTransactions = [...currentTransactions];
+  
   while (checkDate <= now) {
     const year = checkDate.getFullYear();
     const month = String(checkDate.getMonth() + 1).padStart(2, '0');
@@ -201,15 +203,16 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
     
     if (penaltyApplicationDate > now) break;
 
-    const pastTxs = simulatedTxs.filter(t => 
+    // Geçmiş işlemleri mevcut currentTransactions'tan değil, güncel simulatedTransactions'tan çekiyoruz
+    const pastTxs = simulatedTransactions.filter(t => 
         new Date(t.date) <= penaltyApplicationDate && 
         t.groupId !== groupId
     );
     
     const { unitBalances } = getBalances(pastTxs, currentUnits);
     
-    const existingPenalties = simulatedTxs.filter(t => t.groupId === groupId && t.type === 'penalty');
-    const existingMarkers = simulatedTxs.filter(t => t.groupId === groupId && t.type === 'system_marker');
+    const existingPenalties = simulatedTransactions.filter(t => t.groupId === groupId && t.type === 'penalty');
+    const existingMarkers = simulatedTransactions.filter(t => t.groupId === groupId && t.type === 'system_marker');
     
     let monthHasPenalty = false;
     
@@ -223,53 +226,48 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
       if (expectedAmount > 0) {
         monthHasPenalty = true;
         if (existingUnitPenalties.length === 0) {
-          const newPenalty = { id: `temp-${Math.random()}`, date: penaltyApplicationDate.toISOString(), type: 'penalty', amount: expectedAmount, unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, groupId: groupId };
-          toCreate.push(newPenalty);
-          simulatedTxs.push(newPenalty);
+          const newTx = { type: 'penalty', amount: expectedAmount, unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, date: penaltyApplicationDate.toISOString(), groupId: groupId };
+          toCreate.push(newTx);
+          // Simülasyona ekle (Sonraki ay bu faizi hesaba katsın)
+          simulatedTransactions.push({ id: `sim-${Date.now()}-${Math.random()}`, ...newTx });
         } else {
           const primary = existingUnitPenalties[0];
           if (primary.amount !== expectedAmount) {
             toUpdate.push({ id: primary.id, amount: expectedAmount });
-            const idx = simulatedTxs.findIndex(t => t.id === primary.id);
-            if (idx !== -1) simulatedTxs[idx] = { ...simulatedTxs[idx], amount: expectedAmount };
+            // Simülasyonda da tutarı güncelle
+            const simIndex = simulatedTransactions.findIndex(t => t.id === primary.id);
+            if (simIndex !== -1) simulatedTransactions[simIndex].amount = expectedAmount;
           }
+          // Fazla kopya varsa sil ve simülasyondan temizle
           for (let i = 1; i < existingUnitPenalties.length; i++) {
             toDelete.push({ id: existingUnitPenalties[i].id, type: 'penalty' });
-            simulatedTxs = simulatedTxs.filter(t => t.id !== existingUnitPenalties[i].id);
+            simulatedTransactions = simulatedTransactions.filter(t => t.id !== existingUnitPenalties[i].id);
           }
         }
       } else {
+        // Hiç faiz olmamalıysa, var olanları sil
         if (existingUnitPenalties.length > 0) {
           existingUnitPenalties.forEach(tx => {
             toDelete.push({ id: tx.id, type: 'penalty' });
-            simulatedTxs = simulatedTxs.filter(t => t.id !== tx.id);
+            simulatedTransactions = simulatedTransactions.filter(t => t.id !== tx.id);
           });
         }
       }
     });
     
-    const currentMonthPenalties = simulatedTxs.filter(t => t.groupId === groupId && t.type === 'penalty');
-    
-    if (!monthHasPenalty && existingMarkers.length === 0 && currentMonthPenalties.length === 0) {
-       const newMarker = { id: `temp-${Math.random()}`, date: penaltyApplicationDate.toISOString(), type: 'system_marker', amount: 0, unitId: null, description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) - ${month}/${year}`, groupId: groupId };
+    const existingMarker = existingMarkers[0];
+    if (!monthHasPenalty && !existingMarker && existingPenalties.length === 0) {
+       const newMarker = { type: 'system_marker', amount: 0, unitId: null, description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) - ${month}/${year}`, date: penaltyApplicationDate.toISOString(), groupId: groupId };
        toCreate.push(newMarker);
-       simulatedTxs.push(newMarker);
-    } else if (monthHasPenalty && existingMarkers.length > 0) {
-       existingMarkers.forEach(m => {
-           toDelete.push({ id: m.id, type: 'system_marker' });
-           simulatedTxs = simulatedTxs.filter(t => t.id !== m.id);
-       });
+       simulatedTransactions.push({ id: `sim-${Date.now()}-${Math.random()}`, ...newMarker });
+    } else if (monthHasPenalty && existingMarker) {
+       toDelete.push({ id: existingMarker.id, type: 'system_marker' });
+       simulatedTransactions = simulatedTransactions.filter(t => t.id !== existingMarker.id);
     }
 
     checkDate = new Date(year, checkDate.getMonth() + 1, 1);
   }
-  
-  const cleanToCreate = toCreate.map(tx => {
-    const { id, ...rest } = tx;
-    return rest;
-  });
-  
-  return { toCreate: cleanToCreate, toUpdate, toDelete };
+  return { toCreate, toUpdate, toDelete };
 };
 
 const runAutoReminders = (currentTransactions, currentUnits) => {
