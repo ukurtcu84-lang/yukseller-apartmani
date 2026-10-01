@@ -190,9 +190,8 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
   const toUpdate = [];
   const toDelete = [];
   
-  // KESİN ÇÖZÜM: React state'ini mutasyona uğratmamak için "Derin Kopya (Deep Copy)" alıyoruz.
-  // Her bir işlem nesnesini ({ ...t }) parçalayıp yeniden yaratarak orijinal verilerin bozulmasını önlüyoruz.
-  let simulatedTxs = currentTransactions.map(t => ({ ...t }));
+  // ÇÖZÜM: Hesaplamaları yaparken geçmiş ayların birbirini sonsuz tetiklememesi için simülasyon array'i
+  let simTxs = currentTransactions.map(t => ({ ...t }));
   
   while (checkDate <= now) {
     const year = checkDate.getFullYear();
@@ -202,16 +201,15 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
     
     if (penaltyApplicationDate > now) break;
 
-    // Geçmiş hesaplamalar için artık orijinal currentTransactions değil, anlık hesaplanan güvenli simülasyon listesini kullanıyoruz.
-    const pastTxs = simulatedTxs.filter(t => 
+    const pastTxs = simTxs.filter(t => 
         new Date(t.date) <= penaltyApplicationDate && 
         t.groupId !== groupId
     );
     
     const { unitBalances } = getBalances(pastTxs, currentUnits);
     
-    const existingPenalties = simulatedTxs.filter(t => t.groupId === groupId && t.type === 'penalty');
-    const existingMarkers = simulatedTxs.filter(t => t.groupId === groupId && t.type === 'system_marker');
+    const existingPenalties = simTxs.filter(t => t.groupId === groupId && t.type === 'penalty');
+    const existingMarkers = simTxs.filter(t => t.groupId === groupId && t.type === 'system_marker');
     
     let monthHasPenalty = false;
     
@@ -227,29 +225,27 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
         if (existingUnitPenalties.length === 0) {
           const newTx = { date: penaltyApplicationDate.toISOString(), type: 'penalty', amount: expectedAmount, unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, groupId: groupId };
           toCreate.push(newTx);
-          // Olası ID çakışmalarını önlemek için güvenli id ataması
-          simulatedTxs.push({ id: `sim-${unit.id}-${groupId}`, ...newTx });
+          // Oluşturulan faizi bir sonraki ayın hesaplamasına dahil etmek için simülasyona ekle
+          simTxs.push({ id: `temp-${unit.id}-${groupId}`, ...newTx });
         } else {
           const primary = existingUnitPenalties[0];
           if (primary.amount !== expectedAmount) {
             toUpdate.push({ id: primary.id, amount: expectedAmount });
-            // Simülasyonda nesneyi mutasyona uğratmadan (Safe Replace) yenisiyle değiştiriyoruz
-            const simIndex = simulatedTxs.findIndex(t => t.id === primary.id);
-            if (simIndex !== -1) {
-                simulatedTxs[simIndex] = { ...simulatedTxs[simIndex], amount: expectedAmount };
-            }
+            // Tutar değiştiyse simülasyonda da anlık olarak güncelle
+            const simIndex = simTxs.findIndex(t => t.id === primary.id);
+            if (simIndex !== -1) simTxs[simIndex].amount = expectedAmount;
           }
-          // Varsa kopya fazla faizleri sil
+          // Varsa kopya fazla kayıtları temizle
           for (let i = 1; i < existingUnitPenalties.length; i++) {
             toDelete.push({ id: existingUnitPenalties[i].id, type: 'penalty' });
-            simulatedTxs = simulatedTxs.filter(t => t.id !== existingUnitPenalties[i].id);
+            simTxs = simTxs.filter(t => t.id !== existingUnitPenalties[i].id);
           }
         }
       } else {
         if (existingUnitPenalties.length > 0) {
           existingUnitPenalties.forEach(tx => {
             toDelete.push({ id: tx.id, type: 'penalty' });
-            simulatedTxs = simulatedTxs.filter(t => t.id !== tx.id);
+            simTxs = simTxs.filter(t => t.id !== tx.id);
           });
         }
       }
@@ -259,10 +255,10 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
     if (!monthHasPenalty && !existingMarker && existingPenalties.length === 0) {
        const newMarker = { date: penaltyApplicationDate.toISOString(), type: 'system_marker', amount: 0, unitId: null, description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) - ${month}/${year}`, groupId: groupId };
        toCreate.push(newMarker);
-       simulatedTxs.push({ id: `sim-marker-${groupId}`, ...newMarker });
+       simTxs.push({ id: `temp-marker-${groupId}`, ...newMarker });
     } else if (monthHasPenalty && existingMarker) {
        toDelete.push({ id: existingMarker.id, type: 'system_marker' });
-       simulatedTxs = simulatedTxs.filter(t => t.id !== existingMarker.id);
+       simTxs = simTxs.filter(t => t.id !== existingMarker.id);
     }
 
     checkDate = new Date(year, checkDate.getMonth() + 1, 1);
