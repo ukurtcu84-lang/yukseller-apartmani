@@ -214,57 +214,67 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
   const toUpdate = [];
   const toDelete = [];
   
+  // ÇÖZÜM: SANAL DEFTER (Virtual Ledger)
+  // Her ayın faiz hesaplaması bir sonraki ayı etkilediği için, işlemleri 
+  // Firebase'i beklemeden hafızadaki bu dizide güncelleyerek ilerleyeceğiz.
+  let simulatedTxs = [...currentTransactions];
+  
   while (checkDate <= now) {
     const year = checkDate.getFullYear();
     const month = String(checkDate.getMonth() + 1).padStart(2, '0');
-    const groupId = `auto-penalty-${year}-${month}`;
+    const groupId = `auto-penalty-\({year}-\){month}`;
     const penaltyApplicationDate = new Date(year, checkDate.getMonth(), 5, 12, 0, 0);
     
     if (penaltyApplicationDate > now) break;
 
-    // Kontrol edilen ayın 1. gününü referans alıyoruz
     const startOfCheckMonth = new Date(year, checkDate.getMonth(), 1);
     
-    // HESAPLAMA ANINDA BU AYIN mevcut faiz ve marker kayıtlarını HESAPLAMADAN HARİÇ TUTUYORUZ
-    const pastTxs = currentTransactions.filter(t => {
-        if (t.groupId === groupId) return false;
+    // İşlemleri eski ve hatalı currentTransactions'dan değil, anlık güncellenen Sanal Defterden süzüyoruz
+    const pastTxs = simulatedTxs.filter(t => {
+        if (t.groupId === groupId) return false; 
         
         const tDate = new Date(t.date);
-        
-        // KURAL 1: Tahsilat ve Gelirler ceza gününe (ayın 5'ine) kadar hesaba katılır ki sakinin ödemesi borçtan düşsün.
         if (t.type === 'payment' || t.type === 'income') {
             return tDate <= penaltyApplicationDate;
         }
-        
-        // KURAL 2: Borçlandırmalar (aidat, demirbaş vb.) SADECE geçmiş aylara aitse faize tabi tutulur.
-        // Böylece bu ayın 1'inde kesilen aidat, bu ayın 5'inde haksız yere faiz yemez.
         return tDate < startOfCheckMonth;
     });
     
+    // Geçmiş bakiyeler artık sanal defter üzerinden %100 doğru hesaplanacak
     const { unitBalances } = getBalances(pastTxs, currentUnits);
     
     const existingPenalties = currentTransactions.filter(t => t.groupId === groupId && t.type === 'penalty');
     const existingMarkers = currentTransactions.filter(t => t.groupId === groupId && t.type === 'system_marker');
     
     let monthHasPenalty = false;
+    const newPenaltiesForSimulation = []; // Bu ayki düzeltmeleri hafızada tutacağımız dizi
     
     currentUnits.forEach((unit) => {
       const b = unitBalances[unit.id];
       const principal = (b.dueBalance || 0) + (b.fixtureBalance || 0) + (b.extraBalance || 0) + (b.customBalance || 0);
       
-      // HATA DÜZELTMESİ: 1 TL altındaki kuruşluk/hatalı bakiyeleri sıfır kabul ederek sonsuz döngüyü önlüyoruz.
       const expectedAmount = principal >= 1 ? Number((principal * 0.05).toFixed(2)) : 0;
-      
-      // HATA DÜZELTMESİ: .find yerine .filter kullanarak geçmişten kalan olası tüm kopya kayıtları tespit ediyoruz.
       const existingUnitPenalties = existingPenalties.filter(t => t.unitId === unit.id);
       
       if (expectedAmount > 0) {
         monthHasPenalty = true;
+        
+        const newTxTemplate = {
+            date: penaltyApplicationDate.toISOString(),
+            type: 'penalty',
+            amount: expectedAmount,
+            unitId: unit.id,
+            groupId: groupId,
+            description: `Oto. Gecikme Tazminatı (%5) - \({month}/\){year}`
+        };
+
+        // Gelecek ayların hesabı doğru yapılsın diye sanal deftere geçici id ile ekliyoruz
+        newPenaltiesForSimulation.push({ ...newTxTemplate, id: existingUnitPenalties.length > 0 ? existingUnitPenalties[0].id : `sim-\({unit.id}-\){groupId}` });
+
+        // Veritabanına (Firebase) gidecek komutlar:
         if (existingUnitPenalties.length === 0) {
-          // Faiz hiç yazılmamış, oluştur
-          toCreate.push({ date: penaltyApplicationDate.toISOString(), type: 'penalty', amount: expectedAmount, unitId: unit.id, description: `Oto. Gecikme Tazminatı (%5) - ${month}/${year}`, groupId: groupId });
+          toCreate.push(newTxTemplate);
         } else {
-          // Eğer birden fazla kopya faiz oluşmuşsa ilkini asıl kabul et, diğerlerini temizle.
           const primary = existingUnitPenalties[0];
           if (primary.amount !== expectedAmount) {
             toUpdate.push({ id: primary.id, amount: expectedAmount });
@@ -275,21 +285,27 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
         }
       } else {
         if (existingUnitPenalties.length > 0) {
-          // Ödeme sonradan girilmişse veya veritabanında kopya kayıtlar kalmışsa HEPSİNİ sil.
           existingUnitPenalties.forEach(tx => toDelete.push({ id: tx.id, type: 'penalty' }));
         }
       }
     });
     
+    // Döngü sonraki aya geçmeden önce Sanal Defteri temizleyip doğru faizleri içine koyuyoruz
+    simulatedTxs = simulatedTxs.filter(t => t.groupId !== groupId);
+    simulatedTxs.push(...newPenaltiesForSimulation);
+
     const existingMarker = existingMarkers[0];
     if (!monthHasPenalty && !existingMarker && existingPenalties.length === 0) {
-       toCreate.push({ date: penaltyApplicationDate.toISOString(), type: 'system_marker', amount: 0, unitId: null, description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) - ${month}/${year}`, groupId: groupId });
+       const markerData = { date: penaltyApplicationDate.toISOString(), type: 'system_marker', amount: 0, unitId: null, description: `Sistem Kontrolü (Faizlik Borç Bulunmadı) - \({month}/\){year}`, groupId: groupId };
+       toCreate.push(markerData);
+       simulatedTxs.push({ ...markerData, id: `sim-marker-${groupId}` });
     } else if (monthHasPenalty && existingMarker) {
        toDelete.push({ id: existingMarker.id, type: 'system_marker' });
     }
 
     checkDate = new Date(year, checkDate.getMonth() + 1, 1);
   }
+  
   return { toCreate, toUpdate, toDelete };
 };
 
