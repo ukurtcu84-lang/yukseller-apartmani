@@ -207,9 +207,17 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
     // penalties remain in the working set.
     workingTxs = workingTxs.filter(t => t.groupId !== groupId);
 
-    // All transactions up to this month's penalty date, from the working set.
-    // This includes corrected penalties from earlier months.
-    const pastTxs = workingTxs.filter(t => new Date(t.date) <= penaltyApplicationDate);
+    // A penalty posted on the 5th of this month applies to unpaid charges
+    // from previous months only. Payments made by the penalty date still
+    // reduce those previous charges and their penalties.
+    const periodStart = new Date(year, checkDate.getMonth(), 1);
+    const chargeTypes = new Set(['due', 'fixture', 'extra', 'custom']);
+    const pastTxs = workingTxs.filter(t => {
+      const transactionDate = new Date(t.date);
+      if (transactionDate > penaltyApplicationDate) return false;
+      if (chargeTypes.has(t.type) && transactionDate >= periodStart) return false;
+      return true;
+    });
 
     const { unitBalances } = getBalances(pastTxs, currentUnits);
 
@@ -242,8 +250,17 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
           toCreate.push(newPenalty);
         } else {
           const primary = existingUnitPenalties[0];
-          if (Math.abs(primary.amount - expectedAmount) > 0.01) {
-            toUpdate.push({ id: primary.id, amount: expectedAmount });
+          if (
+            Math.abs(primary.amount - expectedAmount) > 0.01 ||
+            primary.description !== newPenalty.description ||
+            primary.date !== newPenalty.date
+          ) {
+            toUpdate.push({
+              id: primary.id,
+              amount: expectedAmount,
+              description: newPenalty.description,
+              date: newPenalty.date
+            });
           }
           for (let i = 1; i < existingUnitPenalties.length; i++) {
             toDelete.push({ id: existingUnitPenalties[i].id, type: 'penalty' });
@@ -260,9 +277,12 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
     // Add this month's corrected penalties to the working set
     workingTxs = [...workingTxs, ...newPenaltiesThisMonth];
 
-    // Handle system markers
+    // Handle system markers — create a marker for any month with no penalty
+    // if one doesn't already exist. This must happen in the SAME pass that
+    // deletes penalties, otherwise the function isn't idempotent and the
+    // next run will create the missing markers, re-triggering the effect.
     const existingMarker = existingMarkers[0];
-    if (!monthHasPenalty && !existingMarker && existingPenalties.length === 0) {
+    if (!monthHasPenalty && !existingMarker) {
       const marker = {
         date: penaltyApplicationDate.toISOString(),
         type: 'system_marker',
@@ -410,7 +430,11 @@ export default function App() {
         const batch = writeBatch(db);
 
         toCreateAll.forEach(tx => batch.set(doc(collection(db, "transactions")), { ...tx, addedBy: 'Sistem' }));
-        toUpdate.forEach(tx => batch.update(doc(db, "transactions", tx.id), { amount: tx.amount }));
+        toUpdate.forEach(tx => batch.update(doc(db, "transactions", tx.id), {
+          amount: tx.amount,
+          description: tx.description,
+          date: tx.date
+        }));
         toDelete.forEach(tx => batch.delete(doc(db, "transactions", tx.id)));
 
         try {
