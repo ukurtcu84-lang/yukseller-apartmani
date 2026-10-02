@@ -368,7 +368,7 @@ export default function App() {
   useEffect(() => {
     const unsubTxs = onSnapshot(collection(db, "transactions"), (snapshot) => {
       const fetchedTxs = [];
-      snapshot.forEach((doc) => fetchedTxs.push({ id: doc.id, ...doc.data() }));
+      snapshot.forEach((snapshotDoc) => fetchedTxs.push({ ...snapshotDoc.data(), id: snapshotDoc.id }));
       fetchedTxs.sort((a, b) => new Date(b.date) - new Date(a.date));
       dispatch({ type: 'SET_TRANSACTIONS', payload: fetchedTxs });
     }, (error) => console.error("İşlemler dinlenemedi:", error));
@@ -419,7 +419,6 @@ export default function App() {
       .join('|||');
 
     if (nonSystemSignature === lastNonSystemSignature.current) return;
-    lastNonSystemSignature.current = nonSystemSignature;
 
     const timer = setTimeout(async () => {
       const { toCreate, toUpdate, toDelete } = runAutoPenalties(transactions, units);
@@ -429,7 +428,10 @@ export default function App() {
       if (toCreateAll.length > 0 || toUpdate.length > 0 || toDelete.length > 0) {
         const batch = writeBatch(db);
 
-        toCreateAll.forEach(tx => batch.set(doc(collection(db, "transactions")), { ...tx, addedBy: 'Sistem' }));
+        toCreateAll.forEach(tx => {
+          const { id: _generatedId, ...transactionData } = tx;
+          batch.set(doc(collection(db, "transactions")), { ...transactionData, addedBy: 'Sistem' });
+        });
         toUpdate.forEach(tx => batch.update(doc(db, "transactions", tx.id), {
           amount: tx.amount,
           description: tx.description,
@@ -439,6 +441,7 @@ export default function App() {
 
         try {
           await batch.commit();
+          lastNonSystemSignature.current = nonSystemSignature;
           let msgs = [];
           const penaltyCreated = toCreateAll.filter(t => t.type === 'penalty').length;
           const penaltyDeleted = toDelete.filter(t => t.type === 'penalty').length;
