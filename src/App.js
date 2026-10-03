@@ -143,29 +143,72 @@ const getBalances = (txs, units) => {
   let totalKasa = 0, totalGider = 0, totalBekleyenAidat = 0, totalBekleyenFaiz = 0, totalBekleyenDemirbas = 0, totalBekleyenEkstra = 0, totalBekleyenOzel = 0;
   const unitBalances = {};
 
-  units.forEach(u => unitBalances[u.id] = { due: 0, penalty: 0, payment: 0, fixture: 0, extra: 0, custom: 0, balance: 0, dueBalance: 0, penaltyBalance: 0, fixtureBalance: 0, extraBalance: 0, customBalance: 0 });
+  units.forEach(u => unitBalances[u.id] = {
+    due: 0,
+    penalty: 0,
+    payment: 0,
+    fixture: 0,
+    extra: 0,
+    custom: 0,
+    balance: 0,
+    dueBalance: 0,
+    penaltyBalance: 0,
+    fixtureBalance: 0,
+    extraBalance: 0,
+    customBalance: 0,
+    credit: 0
+  });
 
-  txs.forEach(t => {
-    if (t.type === 'expense') { totalGider += t.amount; totalKasa -= t.amount; }
-    else if (t.type === 'income') { totalKasa += t.amount; }
-    else if (t.type === 'payment') { totalKasa += t.amount; if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].payment += t.amount; }
-    else if (t.type === 'due') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].due += t.amount; }
-    else if (t.type === 'fixture') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].fixture += t.amount; }
-    else if (t.type === 'extra') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].extra += t.amount; }
-    else if (t.type === 'custom') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].custom += t.amount; }
-    else if (t.type === 'penalty') { if (t.unitId && unitBalances[t.unitId]) unitBalances[t.unitId].penalty += t.amount; }
+  const addCharge = (details, totalKey, balanceKey, amount) => {
+    details[totalKey] += amount;
+    const creditApplied = Math.min(details.credit, amount);
+    details.credit -= creditApplied;
+    details[balanceKey] += amount - creditApplied;
+  };
+
+  const sortedTransactions = [...txs].sort((a, b) => new Date(a.date) - new Date(b.date));
+
+  sortedTransactions.forEach(t => {
+    const amount = Number(t.amount) || 0;
+    if (t.type === 'expense') {
+      totalGider += amount;
+      totalKasa -= amount;
+      return;
+    }
+    if (t.type === 'income') {
+      totalKasa += amount;
+      return;
+    }
+    if (!t.unitId || !unitBalances[t.unitId]) return;
+
+    const details = unitBalances[t.unitId];
+    if (t.type === 'payment') {
+      totalKasa += amount;
+      details.payment += amount;
+      let remainingPayment = amount;
+      const paymentBuckets = ['penaltyBalance', 'dueBalance', 'fixtureBalance', 'extraBalance', 'customBalance'];
+      paymentBuckets.forEach(bucket => {
+        const applied = Math.min(remainingPayment, details[bucket]);
+        details[bucket] -= applied;
+        remainingPayment -= applied;
+      });
+      details.credit += remainingPayment;
+    } else if (t.type === 'due') {
+      addCharge(details, 'due', 'dueBalance', amount);
+    } else if (t.type === 'fixture') {
+      addCharge(details, 'fixture', 'fixtureBalance', amount);
+    } else if (t.type === 'extra') {
+      addCharge(details, 'extra', 'extraBalance', amount);
+    } else if (t.type === 'custom') {
+      addCharge(details, 'custom', 'customBalance', amount);
+    } else if (t.type === 'penalty') {
+      details.penalty += amount;
+      details.penaltyBalance += amount;
+    }
   });
 
   Object.values(unitBalances).forEach(details => {
-    let remainingPayment = details.payment;
-
-    if (remainingPayment >= details.penalty) { details.penaltyBalance = 0; remainingPayment -= details.penalty; } else { details.penaltyBalance = details.penalty - remainingPayment; remainingPayment = 0; }
-    if (remainingPayment >= details.due) { details.dueBalance = 0; remainingPayment -= details.due; } else { details.dueBalance = details.due - remainingPayment; remainingPayment = 0; }
-    if (remainingPayment >= details.fixture) { details.fixtureBalance = 0; remainingPayment -= details.fixture; } else { details.fixtureBalance = details.fixture - remainingPayment; remainingPayment = 0; }
-    if (remainingPayment >= details.extra) { details.extraBalance = 0; remainingPayment -= details.extra; } else { details.extraBalance = details.extra - remainingPayment; remainingPayment = 0; }
-    if (remainingPayment >= details.custom) { details.customBalance = 0; remainingPayment -= details.custom; } else { details.customBalance = details.custom - remainingPayment; remainingPayment = 0; }
-
-    details.balance = details.dueBalance + details.fixtureBalance + details.extraBalance + details.customBalance + details.penaltyBalance - remainingPayment;
+    details.balance = details.dueBalance + details.fixtureBalance + details.extraBalance + details.customBalance + details.penaltyBalance - details.credit;
 
     if (details.dueBalance > 0) totalBekleyenAidat += details.dueBalance;
     if (details.fixtureBalance > 0) totalBekleyenDemirbas += details.fixtureBalance;
@@ -212,11 +255,20 @@ const runAutoPenalties = (currentTransactions, currentUnits) => {
     // reduce those previous charges and their penalties.
     const periodStart = new Date(year, checkDate.getMonth(), 1);
     const chargeTypes = new Set(['due', 'fixture', 'extra', 'custom']);
+    const monthNames = ['ocak', 'şubat', 'mart', 'nisan', 'mayıs', 'haziran', 'temmuz', 'ağustos', 'eylül', 'ekim', 'kasım', 'aralık'];
     const pastTxs = workingTxs.filter(t => {
       const transactionDate = new Date(t.date);
       if (transactionDate > penaltyApplicationDate) return false;
-      if (chargeTypes.has(t.type) && transactionDate >= periodStart) return false;
-      return true;
+      if (!chargeTypes.has(t.type)) return true;
+
+      const description = String(t.description || '').toLocaleLowerCase('tr-TR');
+      const chargeMonthIndex = monthNames.findIndex(month => description.includes(`${month} ayı`));
+      if (chargeMonthIndex === -1) return transactionDate < periodStart;
+
+      let chargeYear = transactionDate.getFullYear();
+      if (chargeMonthIndex > transactionDate.getMonth()) chargeYear -= 1;
+      const chargePeriodStart = new Date(chargeYear, chargeMonthIndex, 1);
+      return chargePeriodStart < periodStart; 
     });
 
     const { unitBalances } = getBalances(pastTxs, currentUnits);
