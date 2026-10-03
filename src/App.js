@@ -706,7 +706,7 @@ export default function App() {
           .print-target .text-sm { font-size: 7.5pt !important; }
           .print-target .text-xs { font-size: 7pt !important; }
 
-          #units-print-table { width: 128%; overflow: visible !important; border: 0 !important; border-radius: 0 !important; zoom: 0.78; page-break-after: avoid; }
+          #units-print-table { width: 100%; overflow: visible !important; border: 0 !important; border-radius: 0 !important; zoom: 1; page-break-after: avoid; }
           #units-print-table .units-screen-table, #units-print-table .units-table-heading { display: none !important; }
           #units-print-table > .unit-print-compact { display: block !important; margin: 0 !important; padding: 0 !important; }
           #units-print-table > .print-only { margin: 0 0 4px !important; padding: 0 0 4px !important; }
@@ -714,13 +714,14 @@ export default function App() {
           #units-print-table > .print-only p { font-size: 7.5pt !important; line-height: 1.1 !important; margin: 2px 0 0 !important; }
           #units-print-table table { table-layout: fixed; }
           #units-print-table .unit-print-compact table { width: 100%; border-collapse: collapse; }
-          #units-print-table .unit-print-compact th, #units-print-table .unit-print-compact td { padding: 2px 4px !important; font-size: 7.5pt !important; line-height: 1.05 !important; border-bottom: 1px solid #e2e8f0; }
+          #units-print-table .unit-print-compact th, #units-print-table .unit-print-compact td { padding: 2px 4px !important; font-size: 8.5pt !important; line-height: 1.05 !important; border-bottom: 1px solid #e2e8f0; }
           #units-print-table .unit-print-compact th { color: #475569; background: #f8fafc; font-weight: 700; }
-          #units-print-table .unit-print-compact th:nth-child(1), #units-print-table .unit-print-compact td:nth-child(1) { width: 18%; }
-          #units-print-table .unit-print-compact th:nth-child(2), #units-print-table .unit-print-compact td:nth-child(2) { width: 42%; }
+          #units-print-table .unit-print-compact th:nth-child(1), #units-print-table .unit-print-compact td:nth-child(1) { width: 16%; }
+          #units-print-table .unit-print-compact th:nth-child(2), #units-print-table .unit-print-compact td:nth-child(2) { width: 44%; }
           #units-print-table .unit-print-compact th:nth-child(3), #units-print-table .unit-print-compact td:nth-child(3) { width: 40%; }
-          #units-print-table .unit-print-compact td span { color: #64748b; font-size: 6.5pt; }
-          #units-print-table .unit-print-compact td small { display: inline; margin-left: 4px; color: #64748b; font-size: 6.5pt; }
+          #units-print-table .unit-print-compact td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          #units-print-table .unit-print-compact td span { color: #64748b; font-size: 7.5pt; }
+          #units-print-table .unit-print-compact td small { display: inline; margin-left: 4px; color: #64748b; font-size: 7.5pt; }
           #units-print-table .unit-print-compact td.debt { color: #b91c1c; font-weight: 700; }
           #units-print-table .unit-print-compact td.credit { color: #047857; font-weight: 700; }
           #units-print-table td .rounded-full { padding: 1px 3px !important; font-size: 6.5pt !important; line-height: 1 !important; }
