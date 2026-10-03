@@ -688,7 +688,7 @@ export default function App() {
     <>
       <style dangerouslySetInnerHTML={{__html: `
         @media print {
-          @page { size: A4 portrait; margin: 15mm; }
+          @page { size: A4 portrait; margin: 8mm; }
           body { -webkit-print-color-adjust: exact; print-color-adjust: exact; background: white; margin: 0; padding: 0; }
           body * { visibility: hidden; }
           .print-target, .print-target * { visibility: visible !important; }
@@ -696,15 +696,38 @@ export default function App() {
           .no-print, .no-print * { display: none !important; }
           .print-only { display: block !important; }
 
-          .print-target table { page-break-inside: auto; font-size: 10pt; width: 100%; min-width: auto !important; }
+          .print-target table { page-break-inside: auto; font-size: 8pt; width: 100%; min-width: auto !important; }
           .print-target tr { page-break-inside: avoid; page-break-after: auto; break-inside: avoid; }
           .print-target thead { display: table-header-group; }
-          .print-target th, .print-target td { padding: 6px 8px !important; }
+          .print-target th, .print-target td { padding: 1px 3px !important; line-height: 1 !important; }
           .print-target h1, .print-target h2, .print-target h3 { page-break-after: avoid; }
           .print-target .shadow-sm, .print-target .shadow-md, .print-target .shadow-lg { box-shadow: none !important; }
           .print-target .overflow-x-auto, .print-target .overflow-y-auto { overflow: visible !important; max-height: none !important; }
-          .print-target .text-sm { font-size: 9pt !important; }
-          .print-target .text-xs { font-size: 8pt !important; }
+          .print-target .text-sm { font-size: 7.5pt !important; }
+          .print-target .text-xs { font-size: 7pt !important; }
+
+          #units-print-table { width: 128%; overflow: visible !important; border: 0 !important; border-radius: 0 !important; zoom: 0.78; page-break-after: avoid; }
+          #units-print-table .units-screen-table, #units-print-table .units-table-heading { display: none !important; }
+          #units-print-table > .unit-print-compact { display: block !important; margin: 0 !important; padding: 0 !important; }
+          #units-print-table > .print-only { margin: 0 0 4px !important; padding: 0 0 4px !important; }
+          #units-print-table > .print-only h2 { font-size: 11pt !important; line-height: 1 !important; margin: 0 !important; }
+          #units-print-table > .print-only p { font-size: 7.5pt !important; line-height: 1.1 !important; margin: 2px 0 0 !important; }
+          #units-print-table table { table-layout: fixed; }
+          #units-print-table .unit-print-compact table { width: 100%; border-collapse: collapse; }
+          #units-print-table .unit-print-compact th, #units-print-table .unit-print-compact td { padding: 2px 4px !important; font-size: 7.5pt !important; line-height: 1.05 !important; border-bottom: 1px solid #e2e8f0; }
+          #units-print-table .unit-print-compact th { color: #475569; background: #f8fafc; font-weight: 700; }
+          #units-print-table .unit-print-compact th:nth-child(1), #units-print-table .unit-print-compact td:nth-child(1) { width: 18%; }
+          #units-print-table .unit-print-compact th:nth-child(2), #units-print-table .unit-print-compact td:nth-child(2) { width: 42%; }
+          #units-print-table .unit-print-compact th:nth-child(3), #units-print-table .unit-print-compact td:nth-child(3) { width: 40%; }
+          #units-print-table .unit-print-compact td span { color: #64748b; font-size: 6.5pt; }
+          #units-print-table .unit-print-compact td small { display: inline; margin-left: 4px; color: #64748b; font-size: 6.5pt; }
+          #units-print-table .unit-print-compact td.debt { color: #b91c1c; font-weight: 700; }
+          #units-print-table .unit-print-compact td.credit { color: #047857; font-weight: 700; }
+          #units-print-table td .rounded-full { padding: 1px 3px !important; font-size: 6.5pt !important; line-height: 1 !important; }
+          #units-print-table td .mt-2 { margin-top: 1px !important; }
+          #units-print-table svg { width: 11px !important; height: 11px !important; }
+          #units-print-table td .px-2 { padding-left: 3px !important; padding-right: 3px !important; }
+          #units-print-table tbody tr { height: 5mm; }
         }
         @media screen {
           .print-only { display: none !important; }
@@ -1535,12 +1558,41 @@ function AdminUnits({ units, unitBalances, lastBilledMonth, transactions, onAddT
       )}
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-x-auto" id="units-print-table">
-        <div className="print-only mb-6 text-center border-b-2 border-slate-800 pb-4">
+        <div className="print-only units-table-heading mb-6 text-center border-b-2 border-slate-800 pb-4">
           <h2 className="text-2xl font-bold uppercase tracking-wide">Yükseller Apartmanı - Daire ve Dükkan Listesi</h2>
           <p className="text-slate-600">Filtre: {filterStatus === 'debt' ? 'Borçlular' : filterStatus === 'nodebt' ? 'Borcu Olmayanlar / Alacaklılar' : 'Tümü'} | Tarih: {new Date().toLocaleDateString('tr-TR')}</p>
         </div>
 
-        <table className="w-full text-left border-collapse min-w-[800px]">
+        <div className="unit-print-compact print-only">
+          <div className="unit-print-compact-heading">
+            <h2>Yükseller Apartmanı - Daire ve Dükkan Listesi</h2>
+            <p>Filtre: {filterStatus === 'debt' ? 'Borçlular' : filterStatus === 'nodebt' ? 'Borcu Olmayanlar / Alacaklılar' : 'Tümü'} | Tarih: {new Date().toLocaleDateString('tr-TR')}</p>
+          </div>
+          <table>
+            <thead>
+              <tr><th>Birim</th><th>Sakin / Durum</th><th>Bakiye</th></tr>
+            </thead>
+            <tbody>
+              {filteredUnits.map(unit => {
+                const details = unitBalances[unit.id] || { balance: 0, dueBalance: 0, penaltyBalance: 0 };
+                const isTenant = unit.residentStatus === 'tenant';
+                const residentName = isTenant ? (unit.tenantName || 'Belirtilmemiş') : unit.ownerName;
+                return (
+                  <tr key={unit.id}>
+                    <td>{unit.name}</td>
+                    <td>{residentName || 'Belirtilmemiş'} <span>({isTenant ? 'Kiracı' : 'Mal Sahibi'})</span></td>
+                    <td className={details.balance > 0 ? 'debt' : details.balance < 0 ? 'credit' : ''}>
+                      {details.balance > 0 ? `${details.balance.toLocaleString('tr-TR')} TL Borçlu` : details.balance < 0 ? `${Math.abs(details.balance).toLocaleString('tr-TR')} TL Alacaklı` : 'Borcu Yok'}
+                      {details.balance > 0 && <small>Aidat: {details.dueBalance.toLocaleString('tr-TR')} | Faiz: {details.penaltyBalance.toLocaleString('tr-TR')}</small>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <table className="units-screen-table w-full text-left border-collapse min-w-[800px]">
           <thead>
             <tr className="bg-slate-50 text-slate-500 text-sm border-b border-slate-100">
               <th className="p-4 font-medium">Birim</th>
